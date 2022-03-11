@@ -12,7 +12,7 @@ from scipy import sparse as sp
     GraphiT-GT and GraphiT-GT-LSPE
     
 """
-from transformer_layer import GraphiT_GT_Layer
+from transformer_layer_batches import GraphiT_GT_Layer
 # from layers.graphit_gt_lspe_layer import GraphiT_GT_LSPE_Layer
 from transformer_layer import MLPReadout
 
@@ -87,19 +87,11 @@ class GraphiTNet(nn.Module):
         self.g = None              # For util; To be accessed in loss() function
         
         
-    def forward(self, data, p):
-        h, edge_index, edge_attr, batch = data.x, data.edge_index, data.edge_attr, data.batch
+    def forward(self, h, p, e, k_RW=None, mask=None):
         h = h.squeeze()
         # input embedding
-        num_nodes = h.size()[0]
-        # FIXME: move this to DataLoader
-        k_RW = to_dense_adj(edge_index, edge_attr=edge_attr)
-        e = k_RW.reshape(num_nodes * num_nodes)
         h = self.embedding_h(h)
-        e = self.embedding_e(e)
-        k_RW = (k_RW > 0).float().squeeze()
-        # normalize by Degrees^-0.5
-        k_RW = k_RW * (k_RW.sum(-1, keepdim=True) ** -0.5)
+        e = self.embedding_e(e)        
 
         h = self.in_feat_dropout(h)
         
@@ -136,7 +128,7 @@ class GraphiTNet(nn.Module):
         #     g.ndata['h'] = hp
         
         # readout
-        h = global_pooling(h, batch)
+        h = h.mean(dim=1)# global_pooling(h, batch)
         
         return self.MLP_layer(h)
         

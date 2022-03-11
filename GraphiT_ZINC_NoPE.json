@@ -11,8 +11,8 @@
     
     "params": {
         "seed": 41,
-        "epochs": 10,
-        "batch_size": 1,
+        "epochs": 1000,
+        "batch_size": 32,
         "init_lr": 0.0003,
         "lr_reduce_factor": 0.5,
         "lr_schedule_patience": 25,
@@ -35,14 +35,14 @@
         "in_feat_dropout": 0.0,
         "dropout": 0.0,
         "layer_norm": false,
-        "batch_norm": false,
+        "batch_norm": true,
         
         "use_lapeig_loss": false,
         "alpha_loss": 1e-4,
         "lambda_loss": 1000,
         "pe_init": "no_pe",
         "pos_enc_dim": 16,
-        "adaptive_edge_PE": false,
+        "adaptive_edge_PE": true,
         "p_steps": 16,
         "gamma": 0.25
     }

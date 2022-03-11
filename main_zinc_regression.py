@@ -42,6 +42,7 @@ class DotDict(dict):
     IMPORTING CUSTOM MODULES/METHODS
 """
 from transformer_net import GraphiTNet
+from data import GraphDataset, compute_pe
 
 
 """
@@ -66,7 +67,7 @@ def gpu_setup(use_gpu, gpu_id):
 # coding: utf-8
 
 import torch
-from torch_geometric.data import Data, DataLoader
+from torch_geometric.data import Data
 from torch_geometric.datasets import ZINC
 from torch.utils.tensorboard import SummaryWriter
 import torch.nn.functional as F
@@ -187,7 +188,9 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     #         print('Time taken to add full graph connectivity: ',time.time()-st)
     
     # trainset, valset, testset = dataset.train, dataset.val, dataset.test
-    trainset, valset, testset = dataset['train'], dataset['val'], dataset['test']
+    trainset = GraphDataset(dataset['train'])
+    valset = GraphDataset(dataset['val'])
+    testset = GraphDataset(dataset['test'])
         
     root_log_dir, root_ckpt_dir, write_file_name, write_config_file, viz_dir = dirs
     device = net_params['device']
@@ -229,9 +232,9 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     # import train functions for all GNNs
     from train_epoch import train_epoch_sparse as train_epoch, evaluate_network_sparse as evaluate_network
     
-    train_loader = DataLoader(trainset, num_workers=4, batch_size=params['batch_size'], shuffle=True)
-    val_loader = DataLoader(valset, num_workers=4, batch_size=params['batch_size'], shuffle=False)
-    test_loader = DataLoader(testset, num_workers=4, batch_size=params['batch_size'], shuffle=False)
+    train_loader = DataLoader(trainset, num_workers=1, batch_size=params['batch_size'], shuffle=True, collate_fn=trainset.collate_fn())
+    val_loader = DataLoader(valset, num_workers=4, batch_size=params['batch_size'], shuffle=False, collate_fn=valset.collate_fn())
+    test_loader = DataLoader(testset, num_workers=4, batch_size=params['batch_size'], shuffle=False, collate_fn=testset.collate_fn())
     
     # At any point you can hit Ctrl + C to break out of training early.
     try:
@@ -251,7 +254,7 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
                 epoch_val_losses.append(epoch_val_loss)
                 epoch_train_MAEs.append(epoch_train_mae)
                 epoch_val_MAEs.append(epoch_val_mae)
-                print(epoch_train_mae)
+                # print(epoch_train_mae)
 
                 writer.add_scalar('train/_loss', epoch_train_loss, epoch)
                 writer.add_scalar('val/_loss', epoch_val_loss, epoch)
@@ -416,9 +419,9 @@ def main():
     else:
         DATASET_NAME = config['dataset']
     # dataset = LoadData(DATASET_NAME)
-    zinc_dataset_train = ZINC(root='/scratch/curan/rmenegau/torch_datasets/ZINC', subset=True, split='train')
-    zinc_dataset_val = ZINC(root='/scratch/curan/rmenegau/torch_datasets/ZINC', subset=True, split='val')
-    zinc_dataset_test = ZINC(root='/scratch/curan/rmenegau/torch_datasets/ZINC', subset=True, split='test')
+    zinc_dataset_train = ZINC(root='/scratch/curan/rmenegau/torch_datasets/ZINC', subset=True, split='train')#, transform=compute_pe)
+    zinc_dataset_val = ZINC(root='/scratch/curan/rmenegau/torch_datasets/ZINC', subset=True, split='val')#, transform=compute_pe)
+    zinc_dataset_test = ZINC(root='/scratch/curan/rmenegau/torch_datasets/ZINC', subset=True, split='test')#, transform=compute_pe)
     dataset = {
         'train': zinc_dataset_train,
         'val': zinc_dataset_val,

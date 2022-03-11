@@ -22,18 +22,21 @@ def train_epoch_sparse(model, optimizer, device, data_loader, epoch):
     epoch_train_mae = 0
     nb_data = 0
     gpu_mem = 0
-    for iter, batch_graphs in enumerate(data_loader):
-        batch_graphs = batch_graphs.to(device)
-        batch_targets = batch_graphs.y.flatten().to(device)
+    for iter, (padded_x, padded_adj, batch_mask, batch_pos_enc, batch_targets) in enumerate(data_loader):
+        padded_x = padded_x.to(device)
+        padded_adj = padded_adj.to(device)
+        batch_mask = batch_mask.to(device)
+        batch_pos_enc = batch_pos_enc.to(device)
+        batch_targets = batch_targets.flatten().to(device)
+        p = None
+
         optimizer.zero_grad()
-        batch_pos_enc = None
-        
         # if model.pe_init == 'lap_pe':
         #     sign_flip = torch.rand(batch_pos_enc.size(1)).to(device)
         #     sign_flip[sign_flip>=0.5] = 1.0; sign_flip[sign_flip<0.5] = -1.0
         #     batch_pos_enc = batch_pos_enc * sign_flip.unsqueeze(0)
 
-        batch_scores = model.forward(batch_graphs, batch_pos_enc).flatten()
+        batch_scores = model.forward(padded_x, p, padded_adj, k_RW=batch_pos_enc, mask=batch_mask).flatten()
 
         loss = model.loss(batch_scores, batch_targets)
         loss.backward()
@@ -54,17 +57,21 @@ def evaluate_network_sparse(model, device, data_loader, epoch):
     nb_data = 0
     out_graphs_for_lapeig_viz = []
     with torch.no_grad():
-        for iter, batch_graphs in enumerate(data_loader):
-            batch_graphs = batch_graphs.to(device)
-            batch_targets = batch_graphs.y.flatten().to(device)
+        for iter, (padded_x, padded_adj, batch_mask, batch_pos_enc, batch_targets) in enumerate(data_loader):
+            padded_x = padded_x.to(device)
+            padded_adj = padded_adj.to(device)
+            batch_mask = batch_mask.to(device)
+            batch_pos_enc = batch_pos_enc.to(device)
+            batch_targets = batch_targets.flatten().to(device)
+            p = None
 
-            # try:
-            #     batch_pos_enc = batch_graphs.ndata['pos_enc'].to(device)
-            # except KeyError:
-            #     batch_pos_enc = None
-            batch_pos_enc = None
-                
-            batch_scores = model.forward(batch_graphs, batch_pos_enc).flatten()
+            # optimizer.zero_grad()
+            # if model.pe_init == 'lap_pe':
+            #     sign_flip = torch.rand(batch_pos_enc.size(1)).to(device)
+            #     sign_flip[sign_flip>=0.5] = 1.0; sign_flip[sign_flip<0.5] = -1.0
+            #     batch_pos_enc = batch_pos_enc * sign_flip.unsqueeze(0)
+
+            batch_scores = model.forward(padded_x, p, padded_adj, k_RW=batch_pos_enc, mask=batch_mask).flatten()
 
             loss = model.loss(batch_scores, batch_targets)
             epoch_test_loss += loss.detach().item()

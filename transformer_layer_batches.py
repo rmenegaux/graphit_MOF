@@ -22,6 +22,7 @@ class MultiHeadAttentionLayer(nn.Module):
         self.gamma = gamma
         self.full_graph = full_graph
         self.attention_for = attention_for
+        # self.use_edge_features = use_edge_features
         self.adaptive_edge_PE = adaptive_edge_PE
         
         if self.attention_for == "h": 
@@ -50,51 +51,49 @@ class MultiHeadAttentionLayer(nn.Module):
                 self.V = nn.Linear(in_dim, out_dim * num_heads, bias=False)
     
     
-    def forward(self, h, e, k_RW=None):
+    def forward(self, h, e, k_RW=None, mask=None):
         
-        # h, edge_index, batch = data.x, data.edge_index, data.batch
-
-        Q_h = self.Q(h) # [num_nodes, out_dim * num_heads]
-        K_h = self.K(h) # [num_nodes, out_dim * num_heads]
-        E = self.E(e)   # [num_nodes * num_nodes, out_dim * num_heads]
-
-        num_nodes = Q_h.size()[0]   
-        E = E.reshape(num_nodes, num_nodes, -1) # [num_nodes, num_nodes, out_dim * num_heads]
-            
+        Q_h = self.Q(h) # [n_batch, num_nodes, out_dim * num_heads]
+        K_h = self.K(h) # [n_batch, num_nodes, out_dim * num_heads]
         V_h = self.V(h)
+        E = self.E(e)   # [n_batch, num_nodes * num_nodes, out_dim * num_heads]
+
+        n_batch = Q_h.size()[0]
+        num_nodes = Q_h.size()[1]  
+        E = E.reshape(n_batch, num_nodes, num_nodes, self.num_heads, self.out_dim) # [num_nodes, num_nodes, out_dim * num_heads]
+            
 
         # Reshaping into [num_heads, num_nodes, feat_dim] to 
         # get projections for multi-head attention
-        Q_h = Q_h.reshape(num_nodes, self.num_heads, self.out_dim).transpose(1, 0) # [num_heads, num_nodes, out_dim]
-        K_h = K_h.reshape(num_nodes, self.num_heads, self.out_dim).transpose(1, 0)
-        V_h = V_h.reshape(num_nodes, self.num_heads, self.out_dim).transpose(1, 0)
+        Q_h = Q_h.reshape(n_batch, num_nodes, self.num_heads, self.out_dim)
+        K_h = K_h.reshape(n_batch, num_nodes, self.num_heads, self.out_dim)
+        V_h = V_h.reshape(n_batch, num_nodes, self.num_heads, self.out_dim).transpose(2, 1) # [n_batch, num_heads, num_nodes, out_dim]
         
         # Normalize by sqrt(head dimension)
         scaling = float(self.out_dim) ** -0.5
         K_h = K_h * scaling
 
-        Q_h = Q_h.unsqueeze(1).expand(self.num_heads, num_nodes, num_nodes, self.out_dim) # [num_heads, num_nodes, num_nodes, out_dim]
-        K_h = K_h.unsqueeze(2).expand(self.num_heads, num_nodes, num_nodes, self.out_dim)
-        E = E.reshape(num_nodes, num_nodes, self.num_heads, self.out_dim).permute(2, 0, 1, 3) # [num_heads, num_nodes, num_nodes, out_dim]
-
         # attention(i, j) = sum(Q_i * K_j * E_ij)
-        scores = (K_h * Q_h * E).sum(dim=-1)
-        # torch.einsum(bik,bkj,bijk->bij)
-        # Apply exponential and clamp for numerical stability
-        scores = torch.exp(scores.clamp(-5, 5)) # [num_heads, num_nodes, num_nodes]
+        # scores = torch.einsum('bihk,bjhk->bhij', Q_h, K_h)
+        scores = torch.einsum('bihk,bjhk,bijhk->bhij', Q_h, K_h, E)
 
-        # if self.adaptive_edge_PE:
-        if True:
-            k_RW = k_RW.unsqueeze(0).expand(self.num_heads, num_nodes, num_nodes)
+        if mask is not None:
+            scores = scores * mask * mask.unsqueeze(1)
+        # Apply exponential and clamp for numerical stability
+        scores = torch.exp(scores.clamp(-5, 5)) # [n_batch, num_heads, num_nodes, num_nodes]
+
+        if self.adaptive_edge_PE:
+            # Introduce new dimension for the different heads
+            k_RW = k_RW.unsqueeze(1)
             scores = scores * k_RW
         
-        softmax_denom = scores.sum(-1, keepdim=True).clamp(min=1e-6) # [num_heads, num_nodes, 1]
+        softmax_denom = scores.sum(-1, keepdim=True).clamp(min=1e-6) # [n_batch, num_heads, num_nodes, 1]
 
-        h = scores @ V_h # [num_heads, num_nodes, out_dim]
+        h = scores @ V_h # [n_batch, num_heads, num_nodes, out_dim]
         # Normalize scores
         h = h / softmax_denom
         # Concatenate attention heads
-        h = h.transpose(1, 0).reshape(-1, self.num_heads * self.out_dim) # [num_nodes, out_dim * num_heads]
+        h = h.transpose(2, 1).reshape(-1, num_nodes, self.num_heads * self.out_dim) # [n_batch, num_nodes, out_dim * num_heads]
         
         return h
     
@@ -137,14 +136,14 @@ class GraphiT_GT_Layer(nn.Module):
             self.batch_norm2_h = nn.BatchNorm1d(out_dim)
             
         
-    def forward(self, h, p, e, k_RW=None):
+    def forward(self, h, p, e, k_RW=None, mask=None):
 
         h_in1 = h # for first residual connection
         
         # [START] For calculation of h -----------------------------------------------------------------
         
         # multi-head attention out
-        h = self.attention_h(h, e, k_RW=k_RW)
+        h = self.attention_h(h, e, k_RW=k_RW, mask=mask)
         
         # #Concat multi-head outputs
         # h = h_attn_out.view(-1, self.out_channels)
@@ -160,7 +159,8 @@ class GraphiT_GT_Layer(nn.Module):
             h = self.layer_norm1_h(h)
 
         if self.batch_norm:
-            h = self.batch_norm1_h(h)
+            # Apparently have to do this double transpose for 3D input 
+            h = self.batch_norm1_h(h.transpose(1,2)).transpose(1,2)
 
         h_in2 = h # for second residual connection
 
@@ -177,7 +177,7 @@ class GraphiT_GT_Layer(nn.Module):
             h = self.layer_norm2_h(h)
 
         if self.batch_norm:
-            h = self.batch_norm2_h(h)         
+            h = self.batch_norm2_h(h.transpose(1,2)).transpose(1,2)         
         
         # [END] For calculation of h -----------------------------------------------------------------
         
