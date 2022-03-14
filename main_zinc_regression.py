@@ -76,67 +76,6 @@ import numpy as np
 from timeit import default_timer as timer
 
 
-# def train(model, loader, optimizer):
-#     model.train()
-
-#     loss_all = 0
-#     for data in loader:
-#         data = data.to(device)
-#         optimizer.zero_grad()
-#         output = model(data)
-#         label = data.y.to(device)
-#         loss = criterion(output, label)
-#         loss.backward()
-#         loss_all += data.num_graphs * loss.item()
-#         optimizer.step()
-#     return loss_all
-
-# def eval_epoch(model, loader, criterion, use_cuda=False):
-#     model.eval()
-
-#     running_loss = 0.0
-#     mae_loss = 0.0
-#     mse_loss = 0.0
-
-#     tic = timer()
-#     with torch.no_grad():
-#         for data in loader:
-#             data = data.to(device)
-#             label = data.y.to(device)
-#             output = model(data)
-#             loss = criterion(output, label)
-#             mse_loss += F.mse_loss(output, label).item() * len(data)
-#             mae_loss += F.l1_loss(output, label).item()  * data.num_graphs # * len(data)
-
-#             running_loss += loss.item() * len(data)
-#     toc = timer()
-
-#     n_sample = len(loader.dataset)
-#     epoch_loss = running_loss / n_sample
-#     epoch_mae = mae_loss / n_sample
-#     epoch_mse = mse_loss / n_sample
-#     #print('Val loss: {:.4f} MSE loss: {:.4f} MAE loss: {:.4f} time: {:.2f}s'.format(
-#           # epoch_loss, epoch_mse, epoch_mae, toc - tic))
-#     return epoch_mae, epoch_mse
-
-# writer = SummaryWriter()
-# for epoch in range(num_epochs): 
-#     train_loss = train(model, train_loader, optimizer) / len(zinc_dataset_train)
-#     writer.add_scalar('Loss/train', train_loss, epoch)
-#     if epoch % 20 == 0:
-#         val_loss, _ = eval_epoch(model, val_loader, criterion, use_cuda=False)
-#         test_loss, _ = eval_epoch(model, test_loader, criterion, use_cuda=False)
-#         print('Epoch {} -- Train Loss {:.4f} -- Val Loss {:.4f} -- Test Loss {:.4f}'.format(epoch, train_loss, val_loss, test_loss))
-#         writer.add_scalar('Loss/val', val_loss, epoch)
-#         writer.add_scalar('Loss/test', test_loss, epoch)
-
-
-
-
-
-
-
-
 """
     VIEWING MODEL CONFIG AND PARAMS
 """
@@ -310,43 +249,6 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     print("TOTAL TIME TAKEN: {:.4f}s".format(time.time()-t0))
     print("AVG TIME PER EPOCH: {:.4f}s".format(np.mean(per_epoch_time)))
     
-    
-    # if net_params['pe_init'] == 'rand_walk':
-    #     # Visualize actual and predicted/learned eigenvecs
-    #     from utils.plot_util import plot_graph_eigvec
-    #     if not os.path.exists(viz_dir):
-    #         os.makedirs(viz_dir)
-
-    #     sample_graph_ids = [15,25,45]
-
-    #     for f_idx, graph_id in enumerate(sample_graph_ids):
-
-    #         # Test graphs
-    #         g_dgl = g_outs_test[graph_id]
-
-    #         f = plt.figure(f_idx, figsize=(12,6))
-
-    #         plt1 = f.add_subplot(121)
-    #         plot_graph_eigvec(plt1, graph_id, g_dgl, feature_key='eigvec', actual_eigvecs=True)
-
-    #         plt2 = f.add_subplot(122)
-    #         plot_graph_eigvec(plt2, graph_id, g_dgl, feature_key='p', predicted_eigvecs=True)
-
-    #         f.savefig(viz_dir+'/test'+str(graph_id)+'.jpg')
-
-    #         # Train graphs
-    #         g_dgl = g_outs_train[graph_id]
-
-    #         f = plt.figure(f_idx, figsize=(12,6))
-
-    #         plt1 = f.add_subplot(121)
-    #         plot_graph_eigvec(plt1, graph_id, g_dgl, feature_key='eigvec', actual_eigvecs=True)
-
-    #         plt2 = f.add_subplot(122)
-    #         plot_graph_eigvec(plt2, graph_id, g_dgl, feature_key='p', predicted_eigvecs=True)
-
-    #         f.savefig(viz_dir+'/train'+str(graph_id)+'.jpg')
-
     writer.close()
 
     """

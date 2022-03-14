@@ -14,7 +14,7 @@ import numpy as np
 """
 
 class MultiHeadAttentionLayer(nn.Module):
-    def __init__(self, gamma, in_dim, out_dim, num_heads, full_graph, use_bias, adaptive_edge_PE, attention_for):
+    def __init__(self, gamma, in_dim, out_dim, num_heads, full_graph, use_bias, adaptive_edge_PE, attention_for, use_edge_features):
         super().__init__()
         
         self.out_dim = out_dim
@@ -22,14 +22,15 @@ class MultiHeadAttentionLayer(nn.Module):
         self.gamma = gamma
         self.full_graph = full_graph
         self.attention_for = attention_for
-        # self.use_edge_features = use_edge_features
+        self.use_edge_features = use_edge_features
         self.adaptive_edge_PE = adaptive_edge_PE
         
         if self.attention_for == "h": 
             if use_bias:
                 self.Q = nn.Linear(in_dim, out_dim * num_heads, bias=True)
                 self.K = nn.Linear(in_dim, out_dim * num_heads, bias=True)
-                self.E = nn.Linear(in_dim, out_dim * num_heads, bias=True)
+                if self.use_edge_features:
+                    self.E = nn.Linear(in_dim, out_dim * num_heads, bias=True)
 
                 # if self.full_graph:
                 #     self.Q_2 = nn.Linear(in_dim, out_dim * num_heads, bias=True)
@@ -41,7 +42,8 @@ class MultiHeadAttentionLayer(nn.Module):
             else:
                 self.Q = nn.Linear(in_dim, out_dim * num_heads, bias=False)
                 self.K = nn.Linear(in_dim, out_dim * num_heads, bias=False)
-                self.E = nn.Linear(in_dim, out_dim * num_heads, bias=False)
+                if self.use_edge_features:
+                    self.E = nn.Linear(in_dim, out_dim * num_heads, bias=False)
 
                 # if self.full_graph:
                 #     self.Q_2 = nn.Linear(in_dim, out_dim * num_heads, bias=False)
@@ -49,19 +51,16 @@ class MultiHeadAttentionLayer(nn.Module):
                 #     self.E_2 = nn.Linear(in_dim, out_dim * num_heads, bias=False)
 
                 self.V = nn.Linear(in_dim, out_dim * num_heads, bias=False)
-    
-    
+
+        
     def forward(self, h, e, k_RW=None, mask=None):
         
         Q_h = self.Q(h) # [n_batch, num_nodes, out_dim * num_heads]
         K_h = self.K(h) # [n_batch, num_nodes, out_dim * num_heads]
         V_h = self.V(h)
-        E = self.E(e)   # [n_batch, num_nodes * num_nodes, out_dim * num_heads]
 
         n_batch = Q_h.size()[0]
-        num_nodes = Q_h.size()[1]  
-        E = E.reshape(n_batch, num_nodes, num_nodes, self.num_heads, self.out_dim) # [num_nodes, num_nodes, out_dim * num_heads]
-            
+        num_nodes = Q_h.size()[1]
 
         # Reshaping into [num_heads, num_nodes, feat_dim] to 
         # get projections for multi-head attention
@@ -73,9 +72,14 @@ class MultiHeadAttentionLayer(nn.Module):
         scaling = float(self.out_dim) ** -0.5
         K_h = K_h * scaling
 
-        # attention(i, j) = sum(Q_i * K_j * E_ij)
-        # scores = torch.einsum('bihk,bjhk->bhij', Q_h, K_h)
-        scores = torch.einsum('bihk,bjhk,bijhk->bhij', Q_h, K_h, E)
+        if self.use_edge_features:
+            # attention(i, j) = sum(Q_i * K_j * E_ij)
+            E = self.E(e)   # [n_batch, num_nodes * num_nodes, out_dim * num_heads]
+            E = E.reshape(n_batch, num_nodes, num_nodes, self.num_heads, self.out_dim) # [num_nodes, num_nodes, out_dim * num_heads]
+            scores = torch.einsum('bihk,bjhk,bijhk->bhij', Q_h, K_h, E)
+        else:
+            # attention(i, j) = sum(Q_i * K_j)
+            scores = torch.einsum('bihk,bjhk->bhij', Q_h, K_h)
 
         if mask is not None:
             scores = scores * mask * mask.unsqueeze(1)
@@ -94,7 +98,7 @@ class MultiHeadAttentionLayer(nn.Module):
         h = h / softmax_denom
         # Concatenate attention heads
         h = h.transpose(2, 1).reshape(-1, num_nodes, self.num_heads * self.out_dim) # [n_batch, num_nodes, out_dim * num_heads]
-        
+
         return h
     
 
@@ -103,7 +107,8 @@ class GraphiT_GT_Layer(nn.Module):
         Param: 
     """
     def __init__(self, gamma, in_dim, out_dim, num_heads, full_graph, dropout=0.0,
-                 layer_norm=False, batch_norm=True, residual=True, adaptive_edge_PE=False, use_bias=False):
+                 layer_norm=False, batch_norm=True, residual=True, adaptive_edge_PE=False,
+                 use_bias=False, use_edge_features=False, update_edge_features=False):
         super().__init__()
         
         self.in_channels = in_dim
@@ -113,9 +118,11 @@ class GraphiT_GT_Layer(nn.Module):
         self.residual = residual
         self.layer_norm = layer_norm     
         self.batch_norm = batch_norm
+        self.use_edge_features = use_edge_features
+        self.update_edge_features = update_edge_features
         
         self.attention_h = MultiHeadAttentionLayer(gamma, in_dim, out_dim//num_heads, num_heads,
-                                                   full_graph, use_bias, adaptive_edge_PE, attention_for="h")
+                                                   full_graph, use_bias, adaptive_edge_PE, attention_for="h", use_edge_features=self.use_edge_features)
         
         self.O_h = nn.Linear(out_dim, out_dim)
         
@@ -134,8 +141,26 @@ class GraphiT_GT_Layer(nn.Module):
             
         if self.batch_norm:
             self.batch_norm2_h = nn.BatchNorm1d(out_dim)
+
+        if self.update_edge_features:
+            self.B1 = nn.Linear(out_dim, out_dim)
+            self.B2 = nn.Linear(out_dim, out_dim)
+            self.E12 = nn.Linear(out_dim, out_dim)
             
-        
+
+    def forward_edges(self, h, e):
+        '''
+        Update edge features
+        '''
+        B1_h = self.B1(h)
+        B2_h = self.B2(h)
+        n_batch, n_nodes, n_features = B1_h.size()
+        E12 = self.E12(e)#.reshape(n_batch, n_nodes, n_nodes, n_features)
+        e_out = torch.einsum('bik,bjk,bijk->bijk', B1_h, B2_h, E12)
+        #e_out = e_out.reshape(n_batch, n_nodes * n_nodes, n_features)
+        e = e + F.relu(e_out)
+        return e
+
     def forward(self, h, p, e, k_RW=None, mask=None):
 
         h_in1 = h # for first residual connection
@@ -145,6 +170,8 @@ class GraphiT_GT_Layer(nn.Module):
         # multi-head attention out
         h = self.attention_h(h, e, k_RW=k_RW, mask=mask)
         
+        if self.update_edge_features: 
+            e = self.forward_edges(h_in1, e)
         # #Concat multi-head outputs
         # h = h_attn_out.view(-1, self.out_channels)
        
