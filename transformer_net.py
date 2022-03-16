@@ -76,7 +76,7 @@ class GraphiTNet(nn.Module):
             self.layers = nn.ModuleList([ GraphiT_GT_Layer(gamma, GT_hidden_dim, GT_hidden_dim, GT_n_heads, full_graph, dropout,
                                                            self.layer_norm, self.batch_norm, self.residual, self.adaptive_edge_PE) for _ in range(GT_layers-1) ])
             self.layers.append(GraphiT_GT_Layer(gamma, GT_hidden_dim, GT_out_dim, GT_n_heads, full_graph, dropout,
-                                                self.layer_norm, self.batch_norm, self.residual, self.adaptive_edge_PE))
+                                                self.layer_norm, self.batch_norm, self.residual, False))#self.adaptive_edge_PE))
         
         self.MLP_layer = MLPReadout(GT_out_dim, 1)   # 1 out dim since regression problem        
         
@@ -100,7 +100,7 @@ class GraphiTNet(nn.Module):
         
         # GNN
         for conv in self.layers:
-            h, p = conv(h, p, e, k_RW=k_RW)
+            h, p, e = conv(h, p, e, k_RW=k_RW)
         # g.ndata['h'] = h
         
         # if self.pe_init == 'rand_walk':

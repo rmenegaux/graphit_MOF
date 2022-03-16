@@ -108,7 +108,7 @@ class GraphiT_GT_Layer(nn.Module):
     """
     def __init__(self, gamma, in_dim, out_dim, num_heads, full_graph, dropout=0.0,
                  layer_norm=False, batch_norm=True, residual=True, adaptive_edge_PE=False,
-                 use_bias=False, use_edge_features=False, update_edge_features=False):
+                 use_bias=False, use_edge_features=True, update_edge_features=False):
         super().__init__()
         
         self.in_channels = in_dim
@@ -146,19 +146,22 @@ class GraphiT_GT_Layer(nn.Module):
             self.B1 = nn.Linear(out_dim, out_dim)
             self.B2 = nn.Linear(out_dim, out_dim)
             self.E12 = nn.Linear(out_dim, out_dim)
-            
+            # self.batch_norm_e = nn.BatchNorm1d(out_dim)
 
     def forward_edges(self, h, e):
         '''
         Update edge features
         '''
-        B1_h = self.B1(h)
-        B2_h = self.B2(h)
-        n_batch, n_nodes, n_features = B1_h.size()
+        e_in = e
+        B1_h = self.B1(h).unsqueeze(1)
+        B2_h = self.B2(h).unsqueeze(2)
+        # n_batch, n_nodes, n_features = B1_h.size()
         E12 = self.E12(e)#.reshape(n_batch, n_nodes, n_nodes, n_features)
-        e_out = torch.einsum('bik,bjk,bijk->bijk', B1_h, B2_h, E12)
+        # e = torch.einsum('bik,bjk,bijk->bijk', B1_h, B2_h, E12)
+        e = B1_h + B2_h + E12
         #e_out = e_out.reshape(n_batch, n_nodes * n_nodes, n_features)
-        e = e + F.relu(e_out)
+        # e = self.batch_norm_e(e)
+        e = e_in + F.relu(e)
         return e
 
     def forward(self, h, p, e, k_RW=None, mask=None):
@@ -209,7 +212,7 @@ class GraphiT_GT_Layer(nn.Module):
         # [END] For calculation of h -----------------------------------------------------------------
         
 
-        return h, None
+        return h, None, e
         
     def __repr__(self):
         return '{}(in_channels={}, out_channels={}, heads={}, residual={})'.format(self.__class__.__name__,
