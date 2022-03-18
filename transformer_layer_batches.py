@@ -25,32 +25,20 @@ class MultiHeadAttentionLayer(nn.Module):
         self.use_edge_features = use_edge_features
         self.adaptive_edge_PE = adaptive_edge_PE
         
+        in_dim_h = in_dim # *2 if positional embeddings are concatenated
+
         if self.attention_for == "h": 
-            if use_bias:
-                self.Q = nn.Linear(in_dim, out_dim * num_heads, bias=True)
-                self.K = nn.Linear(in_dim, out_dim * num_heads, bias=True)
-                if self.use_edge_features:
-                    self.E = nn.Linear(in_dim, out_dim * num_heads, bias=True)
+            self.Q = nn.Linear(in_dim_h, out_dim * num_heads, bias=use_bias)
+            self.K = nn.Linear(in_dim_h, out_dim * num_heads, bias=use_bias)
+            if self.use_edge_features:
+                self.E = nn.Linear(in_dim, out_dim * num_heads, bias=use_bias)
 
-                # if self.full_graph:
-                #     self.Q_2 = nn.Linear(in_dim, out_dim * num_heads, bias=True)
-                #     self.K_2 = nn.Linear(in_dim, out_dim * num_heads, bias=True)
-                #     self.E_2 = nn.Linear(in_dim, out_dim * num_heads, bias=True)
+            # if self.full_graph:
+            #     self.Q_2 = nn.Linear(in_dim, out_dim * num_heads, bias=use_bias)
+            #     self.K_2 = nn.Linear(in_dim, out_dim * num_heads, bias=use_bias)
+            #     self.E_2 = nn.Linear(in_dim, out_dim * num_heads, bias=use_bias)
 
-                self.V = nn.Linear(in_dim, out_dim * num_heads, bias=True)
-
-            else:
-                self.Q = nn.Linear(in_dim, out_dim * num_heads, bias=False)
-                self.K = nn.Linear(in_dim, out_dim * num_heads, bias=False)
-                if self.use_edge_features:
-                    self.E = nn.Linear(in_dim, out_dim * num_heads, bias=False)
-
-                # if self.full_graph:
-                #     self.Q_2 = nn.Linear(in_dim, out_dim * num_heads, bias=False)
-                #     self.K_2 = nn.Linear(in_dim, out_dim * num_heads, bias=False)
-                #     self.E_2 = nn.Linear(in_dim, out_dim * num_heads, bias=False)
-
-                self.V = nn.Linear(in_dim, out_dim * num_heads, bias=False)
+            self.V = nn.Linear(in_dim_h, out_dim * num_heads, bias=use_bias)
 
         
     def forward(self, h, e, k_RW=None, mask=None):
@@ -60,7 +48,7 @@ class MultiHeadAttentionLayer(nn.Module):
         V_h = self.V(h)
 
         n_batch = Q_h.size()[0]
-        num_nodes = Q_h.size()[1]
+        num_nodes = e.size()[1]
 
         # Reshaping into [num_heads, num_nodes, feat_dim] to 
         # get projections for multi-head attention
@@ -73,9 +61,9 @@ class MultiHeadAttentionLayer(nn.Module):
         K_h = K_h * scaling
 
         if self.use_edge_features:
-            # attention(i, j) = sum(Q_i * K_j * E_ij)
             E = self.E(e)   # [n_batch, num_nodes * num_nodes, out_dim * num_heads]
             E = E.reshape(n_batch, num_nodes, num_nodes, self.num_heads, self.out_dim) # [num_nodes, num_nodes, out_dim * num_heads]
+            # attention(i, j) = sum(Q_i * K_j * E_ij)
             scores = torch.einsum('bihk,bjhk,bijhk->bhij', Q_h, K_h, E)
         else:
             # attention(i, j) = sum(Q_i * K_j)
@@ -108,7 +96,7 @@ class GraphiT_GT_Layer(nn.Module):
     """
     def __init__(self, gamma, in_dim, out_dim, num_heads, full_graph, dropout=0.0,
                  layer_norm=False, batch_norm=True, residual=True, adaptive_edge_PE=False,
-                 use_bias=False, use_edge_features=True, update_edge_features=False):
+                 use_bias=False, use_edge_features=True, update_edge_features=True):
         super().__init__()
         
         self.in_channels = in_dim
@@ -170,6 +158,8 @@ class GraphiT_GT_Layer(nn.Module):
         
         # [START] For calculation of h -----------------------------------------------------------------
         
+        #if p is not None:
+        #    h = torch.cat((h, p), dim=-1)
         # multi-head attention out
         h = self.attention_h(h, e, k_RW=k_RW, mask=mask)
         
@@ -212,7 +202,7 @@ class GraphiT_GT_Layer(nn.Module):
         # [END] For calculation of h -----------------------------------------------------------------
         
 
-        return h, None, e
+        return h, p, e
         
     def __repr__(self):
         return '{}(in_channels={}, out_channels={}, heads={}, residual={})'.format(self.__class__.__name__,

@@ -14,7 +14,7 @@ from scipy import sparse as sp
 """
 from transformer_layer_batches import GraphiT_GT_Layer
 # from layers.graphit_gt_lspe_layer import GraphiT_GT_LSPE_Layer
-from transformer_layer import MLPReadout
+from transformer_layer_batches import MLPReadout
 
 
 def global_pooling(x, batch, readout='mean'):
@@ -61,22 +61,16 @@ class GraphiTNet(nn.Module):
         
         self.pos_enc_dim = net_params['pos_enc_dim']
         
-        # if self.pe_init in ['rand_walk']:
-        #     self.embedding_p = nn.Linear(self.pos_enc_dim, GT_hidden_dim)
+        if self.pe_init in ['rand_walk']:
+            self.embedding_p = nn.Linear(self.pos_enc_dim, GT_hidden_dim)
         
         self.embedding_h = nn.Embedding(num_atom_type, GT_hidden_dim)
         self.embedding_e = nn.Embedding(num_bond_type + 1, GT_hidden_dim)
         
-        if self.pe_init == 'rand_walk':
-            pass
-            # LSPE
-            # self.é                                    self.layer_norm, self.batch_norm, self.residual, self.adaptive_edge_PE))
-        else: 
-            # NoPE
-            self.layers = nn.ModuleList([ GraphiT_GT_Layer(gamma, GT_hidden_dim, GT_hidden_dim, GT_n_heads, full_graph, dropout,
-                                                           self.layer_norm, self.batch_norm, self.residual, self.adaptive_edge_PE) for _ in range(GT_layers-1) ])
-            self.layers.append(GraphiT_GT_Layer(gamma, GT_hidden_dim, GT_out_dim, GT_n_heads, full_graph, dropout,
-                                                self.layer_norm, self.batch_norm, self.residual, False))#self.adaptive_edge_PE))
+        self.layers = nn.ModuleList([ GraphiT_GT_Layer(gamma, GT_hidden_dim, GT_hidden_dim, GT_n_heads, full_graph, dropout,
+                                                        self.layer_norm, self.batch_norm, self.residual, self.adaptive_edge_PE) for _ in range(GT_layers-1) ])
+        self.layers.append(GraphiT_GT_Layer(gamma, GT_hidden_dim, GT_out_dim, GT_n_heads, full_graph, dropout,
+                                            self.layer_norm, self.batch_norm, self.residual, False))#self.adaptive_edge_PE))
         
         self.MLP_layer = MLPReadout(GT_out_dim, 1)   # 1 out dim since regression problem        
         
@@ -95,12 +89,15 @@ class GraphiTNet(nn.Module):
 
         h = self.in_feat_dropout(h)
         
-        # if self.pe_init in ['rand_walk']:
-        #     p = self.embedding_p(p) 
+        if self.pe_init in ['rand_walk']:
+            p = self.embedding_p(p)
+            h = h + p
         
         # GNN
+        k_RW_0 = k_RW
         for conv in self.layers:
             h, p, e = conv(h, p, e, k_RW=k_RW)
+            k_RW = torch.matmul(k_RW, k_RW_0)
         # g.ndata['h'] = h
         
         # if self.pe_init == 'rand_walk':

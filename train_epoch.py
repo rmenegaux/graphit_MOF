@@ -22,13 +22,13 @@ def train_epoch_sparse(model, optimizer, device, data_loader, epoch):
     epoch_train_mae = 0
     nb_data = 0
     gpu_mem = 0
-    for iter, (padded_x, padded_adj, batch_mask, batch_pos_enc, batch_targets) in enumerate(data_loader):
+    for iter, (padded_x, padded_adj, padded_p, batch_mask, batch_pos_enc, batch_targets) in enumerate(data_loader):
         padded_x = padded_x.to(device)
         padded_adj = padded_adj.to(device)
         batch_mask = batch_mask.to(device)
         batch_pos_enc = batch_pos_enc.to(device)
         batch_targets = batch_targets.flatten().to(device)
-        p = None
+        p = padded_p.to(device)
 
         optimizer.zero_grad()
         # if model.pe_init == 'lap_pe':
@@ -57,13 +57,13 @@ def evaluate_network_sparse(model, device, data_loader, epoch):
     nb_data = 0
     out_graphs_for_lapeig_viz = []
     with torch.no_grad():
-        for iter, (padded_x, padded_adj, batch_mask, batch_pos_enc, batch_targets) in enumerate(data_loader):
+        for iter, (padded_x, padded_adj, padded_p, batch_mask, batch_pos_enc, batch_targets) in enumerate(data_loader):
             padded_x = padded_x.to(device)
             padded_adj = padded_adj.to(device)
             batch_mask = batch_mask.to(device)
             batch_pos_enc = batch_pos_enc.to(device)
             batch_targets = batch_targets.flatten().to(device)
-            p = None
+            p = padded_p.to(device)
 
             # optimizer.zero_grad()
             # if model.pe_init == 'lap_pe':

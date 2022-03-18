@@ -12,14 +12,14 @@ class GraphDataset(object):
         """
         self.dataset = dataset
         self.n_features = dataset[0].x.shape[-1]
-        self.pe_list = None
+        self.node_pe_list = None
         self.adj_matrix_list = None
         self.lap_pe_list = None
         self.lap_pe_dim = None
         self.degree_list = None
         # if pe == 'adj':
         #     print('Computing positional encodings')
-        #     self.compute_pe()
+        self.compute_pe()
         if degree:
             self.compute_degree()
 
@@ -28,12 +28,15 @@ class GraphDataset(object):
 
     def __getitem__(self, index):
         data = self.dataset[index]
-        if self.pe_list is not None and len(self.pe_list) == len(self.dataset):
-            data.pe = self.pe_list[index]
-        if self.adj_matrix_list is not None and len(self.adj_matrix_list) == len(self.dataset):
-            data.adj_matrix = self.adj_matrix_list[index]
-        if self.degree_list is not None and len(self.degree_list) == len(self.dataset):
-            data.degree = self.degree_list[index]
+        if self.node_pe_list is not None and len(self.node_pe_list) == len(self.dataset):
+            data.node_pe = self.node_pe_list[index]
+            data.attention_pe = self.attention_pe_list[index]
+            #print('pe: ', data.pe.size())
+            #print('x: ', data.x.size())
+        # if self.adj_matrix_list is not None and len(self.adj_matrix_list) == len(self.dataset):
+        #     data.adj_matrix = self.adj_matrix_list[index]
+        # if self.degree_list is not None and len(self.degree_list) == len(self.dataset):
+        #     data.degree = self.degree_list[index]
         return data
 
     def compute_degree(self):
@@ -43,18 +46,21 @@ class GraphDataset(object):
             self.degree_list.append(deg)
 
     def compute_pe(self):
-        self.adj_matrix_list = []
-        self.pe_list = []
+        self.node_pe_list = []
+        self.attention_pe_list = []
         for i, g in enumerate(self.dataset):
-            adj_matrix = utils.to_dense_adj(g.edge_index, g.edge_attr).squeeze()
-            # g.adj_matrix = adj_matrix
-            self.adj_matrix_list.append(adj_matrix)
-            pe = (adj_matrix > 0)
-            # Normalize by degree
-            pe = pe * (pe.sum(-1, keepdim=True) ** -0.5)
-            self.pe_list.append(pe)
-            # g.pe = pe
-            self.dataset[i] = g
+            node_pe, attention_pe = compute_pe_RW(g)
+            self.node_pe_list.append(node_pe)
+            self.attention_pe_list.append(attention_pe)
+            # adj_matrix = utils.to_dense_adj(g.edge_index, g.edge_attr).squeeze()
+            # # g.adj_matrix = adj_matrix
+            # self.adj_matrix_list.append(adj_matrix)
+            # pe = (adj_matrix > 0)
+            # # Normalize by degree
+            # pe = pe * (pe.sum(-1, keepdim=True) ** -0.5)
+            # self.pe_list.append(pe)
+            # # g.pe = pe
+            # self.dataset[i] = g
 
     def collate_fn(self):
         def collate(batch):
@@ -65,6 +71,7 @@ class GraphDataset(object):
             #print(max_len)
 
             padded_x = torch.zeros((len(batch), max_len), dtype=int)
+            padded_p = torch.zeros((len(batch), max_len, 16), dtype=float)
             padded_adj = torch.zeros((len(batch), max_len, max_len), dtype=int)
             mask = torch.zeros((len(batch), max_len), dtype=bool)
             labels = []
@@ -73,24 +80,21 @@ class GraphDataset(object):
             # if it's the case, use a huge sparse matrix
             # else use a dense tensor
             pos_enc = None
-            use_pe = True#hasattr(batch[0], 'pe') and batch[0].pe is not None
+            use_pe = True # hasattr(batch[0], 'pe') and batch[0].pe is not None
             if use_pe:
                 pos_enc = torch.zeros((len(batch), max_len, max_len))
 
             for i, g in enumerate(batch):
                 labels.append(g.y.view(-1))
+                num_nodes = len(g.x)
                 g = dense_transform(g)
-                g_len = len(g.x)
-
                 padded_x[i] = g.x.squeeze()
-                #print('g.adj_matrix: ', g.adj_matrix.size())
-                #print('padded_adj[i]: ', padded_adj[i, :g_len, :g_len].size())
                 padded_adj[i] = g.adj.squeeze()
+                padded_p[i, :num_nodes] = g.node_pe
                 mask[i] = g.mask
                 if use_pe:
-                    pos_enc[i] = padded_adj[i]
-            #print('len', len((padded_x, padded_adj, mask, pos_enc, default_collate(labels))))
-            return padded_x, padded_adj, mask, pos_enc, default_collate(labels)
+                    pos_enc[i, :num_nodes, :num_nodes] = g.attention_pe
+            return padded_x, padded_adj, padded_p.float(), mask, pos_enc, default_collate(labels)
         return collate
 
 
@@ -103,3 +107,19 @@ def compute_pe(graph):
     #self.pe_list.append(pe)
     graph.pe = pe
     return graph
+
+def compute_pe_RW(graph, p=16):
+    num_nodes = len(graph.x)
+    A = utils.to_dense_adj(graph.edge_index).squeeze()
+    D = A.sum(dim=-1)
+    RW = A / D
+    RW_power = RW
+    node_pe = torch.zeros((num_nodes, p))
+    node_pe[:, 0] = RW.diagonal()
+    for power in range(p-1):
+        RW_power = RW @ RW_power
+        node_pe[:, power + 1] = RW_power.diagonal()
+    I = torch.eye(num_nodes)
+    L = I - RW
+    attention_pe = I - 0.25 * L
+    return node_pe, attention_pe
