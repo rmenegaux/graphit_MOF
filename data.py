@@ -11,11 +11,9 @@ class GraphDataset(object):
         """a pytorch geometric dataset as input
         """
         self.dataset = dataset
-        self.n_features = dataset[0].x.shape[-1]
         self.node_pe_list = None
+        self.attention_pe_list = None
         self.adj_matrix_list = None
-        self.lap_pe_list = None
-        self.lap_pe_dim = None
         self.degree_list = None
         # if pe == 'adj':
         #     print('Computing positional encodings')

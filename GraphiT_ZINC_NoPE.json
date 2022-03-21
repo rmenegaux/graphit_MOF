@@ -13,17 +13,17 @@
         "seed": 41,
         "epochs": 1000,
         "batch_size": 32,
-        "init_lr": 0.0003,
+        "init_lr": 0.0007,
         "lr_reduce_factor": 0.5,
         "lr_schedule_patience": 25,
-        "min_lr": 1e-6,
+        "min_lr": 1e-5,
         "weight_decay": 0.0,
         "print_epoch_interval": 5,
         "max_time": 48
     },
     
     "net_params": {
-        "full_graph": true,
+        "double_attention": false,
 
         "L": 10,
         "hidden_dim": 64,
@@ -43,6 +43,9 @@
         "pe_init": "rand_walk",
         "pos_enc_dim": 16,
         "adaptive_edge_PE": true,
+        "use_edge_features": true,
+        "update_edge_features": true,
+        "update_pos_enc": true,
         "p_steps": 16,
         "gamma": 0.25
     }

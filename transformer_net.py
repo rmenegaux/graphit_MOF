@@ -1,8 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.utils import to_dense_adj
-from torch_geometric.nn import global_mean_pool, global_max_pool, global_add_pool
 
 import numpy as np
 
@@ -12,18 +10,16 @@ from scipy import sparse as sp
     GraphiT-GT and GraphiT-GT-LSPE
     
 """
-from transformer_layer_batches import GraphiT_GT_Layer
-# from layers.graphit_gt_lspe_layer import GraphiT_GT_LSPE_Layer
-from transformer_layer_batches import MLPReadout
+from transformer_layer import GraphiT_GT_Layer, MLPReadout
 
 
-def global_pooling(x, batch, readout='mean'):
+def global_pooling(x, readout='mean'):
     if readout == 'mean':
-        return global_mean_pool(x, batch)
+        return x.mean(dim=1)
     elif readout == 'max':
-        return global_max_pool(x, batch)
+        return x.max(dim=1)
     elif readout == 'sum':
-        return global_add_pool(x, batch)
+        return x.sum(dim=1)
 
 
 class GraphiTNet(nn.Module):
@@ -33,7 +29,6 @@ class GraphiTNet(nn.Module):
         num_atom_type = net_params['num_atom_type']
         num_bond_type = net_params['num_bond_type']
         
-        full_graph = net_params['full_graph']
         gamma = net_params['gamma']
         self.adaptive_edge_PE = net_params['adaptive_edge_PE']
         
@@ -42,101 +37,79 @@ class GraphiTNet(nn.Module):
         GT_out_dim = net_params['out_dim']
         GT_n_heads = net_params['n_heads']
         
-        self.residual = net_params['residual']
         self.readout = net_params['readout']
         in_feat_dropout = net_params['in_feat_dropout']
-        dropout = net_params['dropout']
 
         self.readout = net_params['readout']
-        self.layer_norm = net_params['layer_norm']
-        self.batch_norm = net_params['batch_norm']
 
-        self.device = net_params['device']
         self.in_feat_dropout = nn.Dropout(in_feat_dropout)
         self.pe_init = net_params['pe_init']
         
-        self.use_lapeig_loss = net_params['use_lapeig_loss']
-        self.lambda_loss = net_params['lambda_loss']
-        self.alpha_loss = net_params['alpha_loss']
-        
         self.pos_enc_dim = net_params['pos_enc_dim']
+        self.use_edge_features = net_params['use_edge_features']
+
+        layer_params = {}
+        for param in [
+            'double_attention',
+            'dropout',
+            'layer_norm',
+            'batch_norm',
+            'residual',
+            'adaptive_edge_PE',
+            'use_edge_features',
+            'update_edge_features',
+            'update_pos_enc',
+            ]:
+            layer_params[param] = net_params[param]
         
         if self.pe_init in ['rand_walk']:
             self.embedding_p = nn.Linear(self.pos_enc_dim, GT_hidden_dim)
         
         self.embedding_h = nn.Embedding(num_atom_type, GT_hidden_dim)
-        self.embedding_e = nn.Embedding(num_bond_type + 1, GT_hidden_dim)
+        if self.use_edge_features:
+            self.embedding_e = nn.Embedding(num_bond_type + 1, GT_hidden_dim)
         
-        self.layers = nn.ModuleList([ GraphiT_GT_Layer(gamma, GT_hidden_dim, GT_hidden_dim, GT_n_heads, full_graph, dropout,
-                                                        self.layer_norm, self.batch_norm, self.residual, self.adaptive_edge_PE) for _ in range(GT_layers-1) ])
-        self.layers.append(GraphiT_GT_Layer(gamma, GT_hidden_dim, GT_out_dim, GT_n_heads, full_graph, dropout,
-                                            self.layer_norm, self.batch_norm, self.residual, False))#self.adaptive_edge_PE))
+        self.layers = nn.ModuleList([
+            GraphiT_GT_Layer(gamma, GT_hidden_dim, GT_hidden_dim, GT_n_heads, **layer_params) for _ in range(GT_layers-1)
+            ])
+        layer_params['adaptive_edge_PE'] = False # Last layer with full vanilla attention
+        self.layers.append(
+            GraphiT_GT_Layer(gamma, GT_hidden_dim, GT_out_dim, GT_n_heads, **layer_params)
+            )
         
         self.MLP_layer = MLPReadout(GT_out_dim, 1)   # 1 out dim since regression problem        
-        
-        # if self.pe_init == 'rand_walk':
-        #     self.p_out = nn.Linear(GT_out_dim, self.pos_enc_dim)
-        #     self.Whp = nn.Linear(GT_out_dim+self.pos_enc_dim, GT_out_dim)
-        
-        self.g = None              # For util; To be accessed in loss() function
-        
+                
         
     def forward(self, h, p, e, k_RW=None, mask=None):
         h = h.squeeze()
         # input embedding
         h = self.embedding_h(h)
+
+        # if self.use_edge_features:
+        #     e = self.embedding_e(e)
         e = self.embedding_e(e)        
 
         h = self.in_feat_dropout(h)
         
-        if self.pe_init in ['rand_walk']:
-            p = self.embedding_p(p)
-            h = h + p
+        # if self.pe_init in ['rand_walk']:
+        #     p = self.embedding_p(p)
+        #     h = h + p
+        p = self.embedding_p(p)
+        h = h + p
         
-        # GNN
         k_RW_0 = k_RW
         for conv in self.layers:
             h, p, e = conv(h, p, e, k_RW=k_RW)
+            # This part should probably be moved to the DataLoader:
             k_RW = torch.matmul(k_RW, k_RW_0)
-        # g.ndata['h'] = h
-        
-        # if self.pe_init == 'rand_walk':
-        #     p = self.p_out(p)
-        #     g.ndata['p'] = p
-        
-        # if self.use_lapeig_loss and self.pe_init == 'rand_walk':
-        #     # Implementing p_g = p_g - torch.mean(p_g, dim=0)
-        #     means = dgl.mean_nodes(g, 'p')
-        #     batch_wise_p_means = means.repeat_interleave(g.batch_num_nodes(), 0)
-        #     p = p - batch_wise_p_means
-
-        #     # Implementing p_g = p_g / torch.norm(p_g, p=2, dim=0)
-        #     g.ndata['p'] = p
-        #     g.ndata['p2'] = g.ndata['p']**2
-        #     norms = dgl.sum_nodes(g, 'p2')
-        #     norms = torch.sqrt(norms+1e-6)            
-        #     batch_wise_p_l2_norms = norms.repeat_interleave(g.batch_num_nodes(), 0)
-        #     p = p / batch_wise_p_l2_norms
-        #     g.ndata['p'] = p
-        
-        # if self.pe_init == 'rand_walk':
-        #     # Concat h and p
-        #     hp = self.Whp(torch.cat((g.ndata['h'],g.ndata['p']),dim=-1))
-        #     g.ndata['h'] = hp
         
         # readout
-        h = h.mean(dim=1)# global_pooling(h, batch)
+        h = global_pooling(h, readout=self.readout)
         
         return self.MLP_layer(h)
         
     def loss(self, scores, targets):
 
-        # Loss A: Task loss -------------------------------------------------------------
-        loss_a = nn.L1Loss()(scores, targets)
-        
-        if self.use_lapeig_loss:
-            raise NotImplementedError
-        else:
-            loss = loss_a
+        loss = nn.L1Loss()(scores, targets)
         
         return loss

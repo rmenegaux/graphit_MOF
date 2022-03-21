@@ -75,6 +75,7 @@ import torch.nn.functional as F
 import numpy as np
 from timeit import default_timer as timer
 
+save_run_tensorboard = False
 
 """
     VIEWING MODEL CONFIG AND PARAMS
@@ -139,7 +140,8 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
         f.write("""Dataset: {},\nModel: {}\n\nparams={}\n\nnet_params={}\n\n\nTotal Parameters: {}\n\n"""                .format(DATASET_NAME, MODEL_NAME, params, net_params, net_params['total_param']))
         
     log_dir = os.path.join(root_log_dir, "RUN_" + str(0))
-    writer = SummaryWriter(log_dir=log_dir)
+    if save_run_tensorboard:
+        writer = SummaryWriter(log_dir=log_dir)
 
     # setting seeds
     random.seed(params['seed'])
@@ -194,13 +196,13 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
                 epoch_train_MAEs.append(epoch_train_mae)
                 epoch_val_MAEs.append(epoch_val_mae)
                 # print(epoch_train_mae)
-
-                writer.add_scalar('train/_loss', epoch_train_loss, epoch)
-                writer.add_scalar('val/_loss', epoch_val_loss, epoch)
-                writer.add_scalar('train/_mae', epoch_train_mae, epoch)
-                writer.add_scalar('val/_mae', epoch_val_mae, epoch)
-                writer.add_scalar('test/_mae', epoch_test_mae, epoch)
-                writer.add_scalar('learning_rate', optimizer.param_groups[0]['lr'], epoch)
+                if save_run_tensorboard:
+                    writer.add_scalar('train/_loss', epoch_train_loss, epoch)
+                    writer.add_scalar('val/_loss', epoch_val_loss, epoch)
+                    writer.add_scalar('train/_mae', epoch_train_mae, epoch)
+                    writer.add_scalar('val/_mae', epoch_val_mae, epoch)
+                    writer.add_scalar('test/_mae', epoch_test_mae, epoch)
+                    writer.add_scalar('learning_rate', optimizer.param_groups[0]['lr'], epoch)
 
                         
                 t.set_postfix(time=time.time()-start, lr=optimizer.param_groups[0]['lr'],
@@ -249,7 +251,8 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     print("TOTAL TIME TAKEN: {:.4f}s".format(time.time()-t0))
     print("AVG TIME PER EPOCH: {:.4f}s".format(np.mean(per_epoch_time)))
     
-    writer.close()
+    if save_run_tensorboard:
+        writer.close()
 
     """
         Write the results in out_dir/results folder
@@ -290,7 +293,8 @@ def main():
     parser.add_argument('--hidden_dim', help="Please give a value for hidden_dim")
     parser.add_argument('--out_dim', help="Please give a value for out_dim")
     parser.add_argument('--residual', help="Please give a value for residual")
-    parser.add_argument('--edge_feat', help="Please give a value for edge_feat")
+    parser.add_argument('--use_edge_features', help="Please give a value for use_edge_features")
+    parser.add_argument('--update_edge_features', help="Please give a value for update_edge_features")
     parser.add_argument('--readout', help="Please give a value for readout")
     parser.add_argument('--in_feat_dropout', help="Please give a value for in_feat_dropout")
     parser.add_argument('--dropout', help="Please give a value for dropout")
@@ -299,6 +303,7 @@ def main():
     parser.add_argument('--max_time', help="Please give a value for max_time")
     parser.add_argument('--pos_enc_dim', help="Please give a value for pos_enc_dim")
     parser.add_argument('--pos_enc', help="Please give a value for pos_enc")
+    parser.add_argument('--update_pos_enc', help="Please give a value for update_pos_enc")
     parser.add_argument('--alpha_loss', help="Please give a value for alpha_loss")
     parser.add_argument('--lambda_loss', help="Please give a value for lambda_loss")
     parser.add_argument('--pe_init', help="Please give a value for pe_init")
@@ -368,8 +373,12 @@ def main():
         net_params['out_dim'] = int(args.out_dim)   
     if args.residual is not None:
         net_params['residual'] = True if args.residual=='True' else False
-    if args.edge_feat is not None:
-        net_params['edge_feat'] = True if args.edge_feat=='True' else False
+    if args.use_edge_features is not None:
+        net_params['use_edge_features'] = True if args.use_edge_features=='True' else False
+    if args.update_edge_features is not None:
+        net_params['update_edge_features'] = True if args.update_edge_features=='True' else False
+    if args.update_pos_enc is not None:
+        net_params['update_pos_enc'] = True if args.update_pos_enc=='True' else False
     if args.readout is not None:
         net_params['readout'] = args.readout
     if args.in_feat_dropout is not None:
@@ -424,8 +433,4 @@ def main():
 
     
     
-main()    
-
-
-
-
+main()
