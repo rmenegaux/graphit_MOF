@@ -75,7 +75,7 @@ import torch.nn.functional as F
 import numpy as np
 from timeit import default_timer as timer
 
-save_run_tensorboard = False
+save_run_tensorboard = True
 
 """
     VIEWING MODEL CONFIG AND PARAMS
@@ -173,7 +173,7 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     # import train functions for all GNNs
     from train_epoch import train_epoch_sparse as train_epoch, evaluate_network_sparse as evaluate_network
     
-    train_loader = DataLoader(trainset, num_workers=1, batch_size=params['batch_size'], shuffle=True, collate_fn=trainset.collate_fn())
+    train_loader = DataLoader(trainset, num_workers=4, batch_size=params['batch_size'], shuffle=True, collate_fn=trainset.collate_fn())
     val_loader = DataLoader(valset, num_workers=4, batch_size=params['batch_size'], shuffle=False, collate_fn=valset.collate_fn())
     test_loader = DataLoader(testset, num_workers=4, batch_size=params['batch_size'], shuffle=False, collate_fn=testset.collate_fn())
     
@@ -299,13 +299,13 @@ def main():
     parser.add_argument('--in_feat_dropout', help="Please give a value for in_feat_dropout")
     parser.add_argument('--dropout', help="Please give a value for dropout")
     parser.add_argument('--layer_norm', help="Please give a value for layer_norm")
+    parser.add_argument('--feedforward', help="Please give a value for feedforward")
     parser.add_argument('--batch_norm', help="Please give a value for batch_norm")
     parser.add_argument('--max_time', help="Please give a value for max_time")
     parser.add_argument('--pos_enc_dim', help="Please give a value for pos_enc_dim")
     parser.add_argument('--pos_enc', help="Please give a value for pos_enc")
     parser.add_argument('--update_pos_enc', help="Please give a value for update_pos_enc")
-    parser.add_argument('--alpha_loss', help="Please give a value for alpha_loss")
-    parser.add_argument('--lambda_loss', help="Please give a value for lambda_loss")
+    parser.add_argument('--concat_h_p', help="Please give a value for concat_h_p")
     parser.add_argument('--pe_init', help="Please give a value for pe_init")
     args = parser.parse_args()
     with open(args.config) as f:
@@ -379,12 +379,16 @@ def main():
         net_params['update_edge_features'] = True if args.update_edge_features=='True' else False
     if args.update_pos_enc is not None:
         net_params['update_pos_enc'] = True if args.update_pos_enc=='True' else False
+    if args.concat_h_p is not None:
+        net_params['concat_h_p'] = True if args.concat_h_p=='True' else False
     if args.readout is not None:
         net_params['readout'] = args.readout
     if args.in_feat_dropout is not None:
         net_params['in_feat_dropout'] = float(args.in_feat_dropout)
     if args.dropout is not None:
         net_params['dropout'] = float(args.dropout)
+    if args.feedforward is not None:
+        net_params['feedforward'] = True if args.feedforward=='True' else False
     if args.layer_norm is not None:
         net_params['layer_norm'] = True if args.layer_norm=='True' else False
     if args.batch_norm is not None:
@@ -393,10 +397,6 @@ def main():
         net_params['pos_enc'] = True if args.pos_enc=='True' else False
     if args.pos_enc_dim is not None:
         net_params['pos_enc_dim'] = int(args.pos_enc_dim)
-    if args.alpha_loss is not None:
-        net_params['alpha_loss'] = float(args.alpha_loss)
-    if args.lambda_loss is not None:
-        net_params['lambda_loss'] = float(args.lambda_loss)
     if args.pe_init is not None:
         net_params['pe_init'] = args.pe_init
         

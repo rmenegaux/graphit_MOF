@@ -29,7 +29,6 @@ class GraphiTNet(nn.Module):
         num_atom_type = net_params['num_atom_type']
         num_bond_type = net_params['num_bond_type']
         
-        gamma = net_params['gamma']
         self.adaptive_edge_PE = net_params['adaptive_edge_PE']
         
         GT_layers = net_params['L']
@@ -48,7 +47,7 @@ class GraphiTNet(nn.Module):
         self.pos_enc_dim = net_params['pos_enc_dim']
         self.use_edge_features = net_params['use_edge_features']
 
-        layer_params = {}
+        layer_params = {'use_bias': False}
         for param in [
             'double_attention',
             'dropout',
@@ -59,6 +58,8 @@ class GraphiTNet(nn.Module):
             'use_edge_features',
             'update_edge_features',
             'update_pos_enc',
+            'concat_h_p',
+            'feedforward',
             ]:
             layer_params[param] = net_params[param]
         
@@ -70,11 +71,11 @@ class GraphiTNet(nn.Module):
             self.embedding_e = nn.Embedding(num_bond_type + 1, GT_hidden_dim)
         
         self.layers = nn.ModuleList([
-            GraphiT_GT_Layer(gamma, GT_hidden_dim, GT_hidden_dim, GT_n_heads, **layer_params) for _ in range(GT_layers-1)
+            GraphiT_GT_Layer(GT_hidden_dim, GT_hidden_dim, GT_n_heads, **layer_params) for _ in range(GT_layers-1)
             ])
         layer_params['adaptive_edge_PE'] = False # Last layer with full vanilla attention
         self.layers.append(
-            GraphiT_GT_Layer(gamma, GT_hidden_dim, GT_out_dim, GT_n_heads, **layer_params)
+            GraphiT_GT_Layer(GT_hidden_dim, GT_out_dim, GT_n_heads, **layer_params)
             )
         
         self.MLP_layer = MLPReadout(GT_out_dim, 1)   # 1 out dim since regression problem        
@@ -82,24 +83,22 @@ class GraphiTNet(nn.Module):
         
     def forward(self, h, p, e, k_RW=None, mask=None):
         h = h.squeeze()
-        # input embedding
+        # Node embedding
         h = self.embedding_h(h)
-
-        # if self.use_edge_features:
-        #     e = self.embedding_e(e)
-        e = self.embedding_e(e)        
+        # Binary adjacency matrix (used for double attention)
+        adj = (e > 0)
+        # Edge embedding
+        if self.use_edge_features:
+            e = self.embedding_e(e)
 
         h = self.in_feat_dropout(h)
         
-        # if self.pe_init in ['rand_walk']:
-        #     p = self.embedding_p(p)
-        #     h = h + p
-        p = self.embedding_p(p)
-        h = h + p
+        if self.pe_init in ['rand_walk']:
+            p = self.embedding_p(p)
         
         k_RW_0 = k_RW
         for conv in self.layers:
-            h, p, e = conv(h, p, e, k_RW=k_RW)
+            h, p, e = conv(h, p, e, k_RW=k_RW, mask=mask, adj=adj)
             # This part should probably be moved to the DataLoader:
             k_RW = torch.matmul(k_RW, k_RW_0)
         
