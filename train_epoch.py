@@ -8,9 +8,6 @@ import torch.nn.functional as F
 import math
 
 
-
-# from train.metrics import MAE
-
 def MAE(scores, targets):
     MAE = F.l1_loss(scores, targets)
     MAE = MAE.detach().item()
@@ -22,28 +19,25 @@ def train_epoch_sparse(model, optimizer, device, data_loader, epoch):
     epoch_train_mae = 0
     nb_data = 0
     gpu_mem = 0
-    for iter, (padded_x, padded_adj, padded_p, batch_mask, batch_pos_enc, batch_targets) in enumerate(data_loader):
+    for iter, (padded_x, padded_adj, padded_p, batch_mask, attention_pe, batch_targets) in enumerate(data_loader):
         padded_x = padded_x.to(device)
         padded_adj = padded_adj.to(device)
         batch_mask = batch_mask.to(device)
-        batch_pos_enc = batch_pos_enc.to(device)
+        if attention_pe is not None:
+            attention_pe = attention_pe.to(device)
         batch_targets = batch_targets.flatten().to(device)
-        p = padded_p.to(device)
+        if padded_p is not None:
+            padded_p = padded_p.float().to(device)
 
         optimizer.zero_grad()
-        # if model.pe_init == 'lap_pe':
-        #     sign_flip = torch.rand(batch_pos_enc.size(1)).to(device)
-        #     sign_flip[sign_flip>=0.5] = 1.0; sign_flip[sign_flip<0.5] = -1.0
-        #     batch_pos_enc = batch_pos_enc * sign_flip.unsqueeze(0)
 
-        batch_scores = model.forward(padded_x, p, padded_adj, k_RW=batch_pos_enc, mask=batch_mask).flatten()
+        batch_scores = model.forward(padded_x, padded_p, padded_adj, k_RW=attention_pe, mask=batch_mask).flatten()
 
         loss = model.loss(batch_scores, batch_targets)
         loss.backward()
         optimizer.step()
         epoch_loss += loss.detach().item()
         epoch_train_mae += MAE(batch_scores, batch_targets)
-        # print(epoch_train_mae)
         nb_data += batch_targets.size(0)
     epoch_loss /= (iter + 1)
     epoch_train_mae /= (iter + 1)
@@ -57,21 +51,17 @@ def evaluate_network_sparse(model, device, data_loader, epoch):
     nb_data = 0
     out_graphs_for_lapeig_viz = []
     with torch.no_grad():
-        for iter, (padded_x, padded_adj, padded_p, batch_mask, batch_pos_enc, batch_targets) in enumerate(data_loader):
+        for iter, (padded_x, padded_adj, padded_p, batch_mask, attention_pe, batch_targets) in enumerate(data_loader):
             padded_x = padded_x.to(device)
             padded_adj = padded_adj.to(device)
             batch_mask = batch_mask.to(device)
-            batch_pos_enc = batch_pos_enc.to(device)
+            if attention_pe is not None:
+                attention_pe = attention_pe.to(device)
             batch_targets = batch_targets.flatten().to(device)
-            p = padded_p.to(device)
+            if padded_p is not None:
+                padded_p = padded_p.float().to(device)
 
-            # optimizer.zero_grad()
-            # if model.pe_init == 'lap_pe':
-            #     sign_flip = torch.rand(batch_pos_enc.size(1)).to(device)
-            #     sign_flip[sign_flip>=0.5] = 1.0; sign_flip[sign_flip<0.5] = -1.0
-            #     batch_pos_enc = batch_pos_enc * sign_flip.unsqueeze(0)
-
-            batch_scores = model.forward(padded_x, p, padded_adj, k_RW=batch_pos_enc, mask=batch_mask).flatten()
+            batch_scores = model.forward(padded_x, padded_p, padded_adj, k_RW=attention_pe, mask=batch_mask).flatten()
 
             loss = model.loss(batch_scores, batch_targets)
             epoch_test_loss += loss.detach().item()
