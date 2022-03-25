@@ -38,15 +38,21 @@
         "layer_norm": false,
         "batch_norm": true,
         
-        "node_pe": "rand_walk",
-        "pos_enc_dim": 16,
+        "use_node_pe": true,
         "update_pos_enc": false,
         "concat_h_p": false,
+        "node_pe_params": {
+            "node_pe": "rand_walk",
+            "p_steps": 16
+        },
 
-        "attention_pe": "none",
-        "p_steps": 16,
-        "beta": 0.25,
-
+        "use_attention_pe": false,
+        "attention_pe_params": {
+            "attention_pe": "rand_walk",
+            "p_steps": 16,
+            "beta": 0.25
+        },
+        
         "use_edge_features": true,
         "update_edge_features": false
     }

@@ -17,8 +17,6 @@ class GraphDataset(object):
         self.degree_list = None
         self.use_node_pe = False
         self.use_attention_pe = False
-        # if pe == 'adj':
-        #     print('Computing positional encodings')
         if degree:
             self.compute_degree()
 
@@ -47,6 +45,7 @@ class GraphDataset(object):
         for i, g in enumerate(self.dataset):
             self.node_pe_list.append(node_pe(g))
         self.use_node_pe = True
+        self.node_pe_dimension = node_pe.get_embedding_dimension()
 
     def compute_attention_pe(self, attention_pe):
         self.attention_pe_list = []
@@ -59,8 +58,6 @@ class GraphDataset(object):
             batch = list(batch)
             max_len = max(len(g.x) for g in batch)
             dense_transform = ToDense(max_len)
-            #print([len(g.x) for g in batch])
-            #print(max_len)
 
             padded_x = torch.zeros((len(batch), max_len), dtype=int)
             padded_adj = torch.zeros((len(batch), max_len, max_len), dtype=int)
@@ -69,7 +66,7 @@ class GraphDataset(object):
             attention_pe = None
             padded_p = None
             if self.use_node_pe:
-                padded_p = torch.zeros((len(batch), max_len, 16), dtype=float)
+                padded_p = torch.zeros((len(batch), max_len, self.node_pe_dimension), dtype=float)
             if self.use_attention_pe:
                 attention_pe = torch.zeros((len(batch), max_len, max_len))
 
@@ -106,7 +103,8 @@ class RandomWalkNodePE(object):
     def __init__(self, **parameters):
         self.p_steps = parameters.get('p_steps', 16)
 
-        self.embedding_dimension = self.p_steps
+    def get_embedding_dimension(self):
+        return self.p_steps
 
     def __call__(self, graph):
         num_nodes = len(graph.x)
@@ -134,15 +132,25 @@ class RandomWalkAttentionPE(object):
         I = torch.eye(num_nodes)
         L = I - RW
         k_RW = I - self.beta * L
-        attention_pe = k_RW
+        k_RW_power = k_RW
         for power in range(self.p_steps-1):
-            attention_pe = attention_pe @ k_RW
-        return attention_pe
+            k_RW_power = k_RW_power @ k_RW
+        return k_RW_power
+
+class AdjacencyAttentionPE(object):
+
+    def __init__(self, **parameters):
+        pass
+
+    def __call__(self, graph):
+        A = utils.to_dense_adj(graph.edge_index).squeeze()
+        return A
 
 NodePositionalEmbeddings = {
     'rand_walk': RandomWalkNodePE
 }
 
 AttentionPositionalEmbeddings = {
-    'rand_walk': RandomWalkAttentionPE
+    'rand_walk': RandomWalkAttentionPE,
+    'adj': AdjacencyAttentionPE,
 }

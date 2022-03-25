@@ -30,6 +30,8 @@ class GraphiTNet(nn.Module):
         num_bond_type = net_params['num_bond_type']
         
         self.use_node_pe = net_params['use_node_pe']
+        if self.use_node_pe:
+            self.pos_enc_dim = net_params['pos_enc_dim']
         self.use_attention_pe = net_params['use_attention_pe']
         
         GT_layers = net_params['L']
@@ -44,7 +46,6 @@ class GraphiTNet(nn.Module):
 
         self.in_feat_dropout = nn.Dropout(in_feat_dropout)
         
-        self.pos_enc_dim = net_params['pos_enc_dim']
         self.use_edge_features = net_params['use_edge_features']
 
         layer_params = {'use_bias': False}
@@ -79,6 +80,10 @@ class GraphiTNet(nn.Module):
             GraphiT_GT_Layer(GT_hidden_dim, GT_out_dim, GT_n_heads, **layer_params)
             )
         
+        if self.use_node_pe:
+            self.p_out = nn.Linear(GT_out_dim, self.pos_enc_dim)
+            self.Whp = nn.Linear(GT_out_dim+self.pos_enc_dim, GT_out_dim)
+
         self.MLP_layer = MLPReadout(GT_out_dim, 1)   # 1 out dim since regression problem        
                 
         
@@ -101,9 +106,14 @@ class GraphiTNet(nn.Module):
         for conv in self.layers:
             h, p, e = conv(h, p, e, k_RW=k_RW, mask=mask, adj=adj)
             # This part should probably be moved to the DataLoader:
-            if self.use_attention_pe:
-                k_RW = torch.matmul(k_RW, k_RW_0)
+            # if self.use_attention_pe:
+            #     k_RW = torch.matmul(k_RW, k_RW_0)
         
+        if self.use_node_pe:
+            p = self.p_out(p)
+            # Concat h and p before classification
+            hp = self.Whp(torch.cat((h, p), dim=-1))
+
         # readout
         h = global_pooling(h, readout=self.readout)
         

@@ -141,7 +141,7 @@ class GraphiT_GT_Layer(nn.Module):
             param: layer_params[param] for param in ['double_attention', 'use_bias', 'use_attention_pe', 'use_edge_features']
         }
         # in_dim*2 if positional embeddings are concatenated rather than summed
-        in_dim_h = in_dim*2 if self.concat_h_p else in_dim
+        in_dim_h = in_dim*2 if (self.use_node_pe and self.concat_h_p) else in_dim
         self.attention_h = MultiHeadAttentionLayer(in_dim_h, in_dim, out_dim//num_heads, num_heads, **attention_params)
         self.O_h = nn.Linear(out_dim, out_dim)
         
@@ -255,7 +255,7 @@ class GraphiT_GT_Layer(nn.Module):
         if self.feedforward:
             h = self.feed_forward_block(h)         
                 
-        if self.update_pos_enc:
+        if self.use_node_pe and self.update_pos_enc:
             p = self.forward_p(p, e, k_RW=k_RW, mask=mask, adj=adj)
 
         return h, p, e

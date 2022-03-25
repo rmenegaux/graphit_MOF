@@ -8,24 +8,17 @@
 """
 import numpy as np
 import os
-import socket
 import time
 import random
 import glob
 import argparse, json
-import pickle
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
 from tqdm import tqdm
-
-import matplotlib
-import matplotlib.pyplot as plt
 
 
 """
@@ -51,28 +44,20 @@ def gpu_setup(use_gpu, gpu_id):
     return device
 
 
-
-
 #!/usr/bin/env python
 # coding: utf-8
 
-import torch
 from torch_geometric.data import Data
 from torch_geometric.datasets import ZINC
 from torch.utils.tensorboard import SummaryWriter
-import torch.nn.functional as F
 
-import numpy as np
-from timeit import default_timer as timer
-
-save_run_tensorboard = False
+save_run_tensorboard = True
 
 """
     VIEWING MODEL CONFIG AND PARAMS
 """
-def view_model_param(MODEL_NAME, net_params):
+def view_model_param(model, MODEL_NAME):
     # model = gnn_model(MODEL_NAME, net_params)
-    model = GraphiTNet(net_params)
     total_param = 0
     print("MODEL DETAILS:\n")
     #print(model)
@@ -92,54 +77,39 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     per_epoch_time = []
         
     DATASET_NAME = 'ZINC'
-    # DATASET_NAME = dataset.name
-    
-    # if net_params['pe_init'] == 'lap_pe':
-    #     tt = time.time()
-    #     print("[!] -LapPE: Initializing graph positional encoding with Laplacian PE.")
-    #     dataset._add_lap_positional_encodings(net_params['pos_enc_dim'])
-    #     print("[!] Time taken: ", time.time()-tt)
-    # elif net_params['pe_init'] == 'rand_walk':
-    #     tt = time.time()
-    #     print("[!] -LSPE: Initializing graph positional encoding with rand walk features.")
-    #     dataset._init_positional_encodings(net_params['pos_enc_dim'], net_params['pe_init'])
-    #     print("[!] Time taken: ", time.time()-tt)
-        
-    #     tt = time.time()
-    #     print("[!] -LSPE (For viz later): Adding lapeigvecs to key 'eigvec' for every graph.")
-    #     dataset._add_eig_vecs(net_params['pos_enc_dim'])
-    #     print("[!] Time taken: ", time.time()-tt)
-        
-    # if MODEL_NAME in ['SAN', 'GraphiT']:
-    #     if net_params['full_graph']:
-    #         st = time.time()
-    #         print("[!] Adding full graph connectivity..")
-    #         dataset._make_full_graph() if MODEL_NAME == 'SAN' else dataset._make_full_graph((net_params['p_steps'], net_params['gamma']))
-    #         print('Time taken to add full graph connectivity: ',time.time()-st)
-    
-    # trainset, valset, testset = dataset.train, dataset.val, dataset.test
+
     trainset = GraphDataset(dataset['train'])
     valset = GraphDataset(dataset['val'])
     testset = GraphDataset(dataset['test'])
 
     # Initialize node positional embeddings
+    node_pe_params = net_params['node_pe_params']
+    attention_pe_params = net_params['attention_pe_params']
+
     if net_params['use_node_pe']:
-        node_pe = NodePositionalEmbeddings[net_params['node_pe']](**net_params)
-        for dset in [trainset, valset, testset]:
-            dset.compute_node_pe(node_pe)
+        node_pe_params = net_params['node_pe_params']
+        if (node_pe_params['node_pe'] not in NodePositionalEmbeddings.keys()):
+            print('{} is not a recognized node positional embedding, defaulting to none')
+            net_params['use_node_pe'] = False
+        else:
+            NodePE = NodePositionalEmbeddings[node_pe_params['node_pe']](**node_pe_params)
+            net_params['pos_enc_dim'] = NodePE.get_embedding_dimension()
+            for dset in [trainset, valset, testset]:
+                dset.compute_node_pe(NodePE)
     # Pre-compute attention relative positional embeddings
     if net_params['use_attention_pe']:
-        attention_pe = AttentionPositionalEmbeddings[net_params['attention_pe']](**net_params)
-        for dset in [trainset, valset, testset]:
-            dset.compute_attention_pe(attention_pe)
+        attention_pe_params = net_params['attention_pe_params']
+        if (attention_pe_params['attention_pe'] not in AttentionPositionalEmbeddings.keys()):
+            print('{} is not a recognized attention positional embedding, defaulting to none')
+            net_params['use_attention_pe'] = False
+        else:
+            AttentionPE = AttentionPositionalEmbeddings[attention_pe_params['attention_pe']](**attention_pe_params)
+            for dset in [trainset, valset, testset]:
+                dset.compute_attention_pe(AttentionPE)
         
     root_log_dir, root_ckpt_dir, write_file_name, write_config_file, viz_dir = dirs
     device = net_params['device']
-    
-    # Write the network and optimization hyper-parameters in folder config/
-    with open(write_config_file + '.txt', 'w') as f:
-        f.write("""Dataset: {},\nModel: {}\n\nparams={}\n\nnet_params={}\n\n\nTotal Parameters: {}\n\n"""                .format(DATASET_NAME, MODEL_NAME, params, net_params, net_params['total_param']))
-        
+       
     log_dir = os.path.join(root_log_dir, "RUN_" + str(0))
     if save_run_tensorboard:
         writer = SummaryWriter(log_dir=log_dir)
@@ -160,6 +130,11 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
 
     # model = gnn_model(MODEL_NAME, net_params)
     model = GraphiTNet(net_params)
+    net_params['total_param'] = view_model_param(model, MODEL_NAME)
+    # Write the network and optimization hyper-parameters in folder config/
+    with open(write_config_file + '.txt', 'w') as f:
+        f.write("""Dataset: {},\nModel: {}\n\nparams={}\n\nnet_params={}\n\n\nTotal Parameters: {}\n\n"""                .format(DATASET_NAME, MODEL_NAME, params, net_params, net_params['total_param']))
+
     model = model.to(device)
 
     optimizer = optim.Adam(model.parameters(), lr=params['init_lr'], weight_decay=params['weight_decay'])
@@ -337,7 +312,8 @@ def main():
         out_dir = args.out_dir
     else:
         out_dir = config['out_dir']
-    # parameters
+
+    # Training parameters
     params = config['params']
     if args.seed is not None:
         params['seed'] = int(args.seed)
@@ -359,7 +335,8 @@ def main():
         params['print_epoch_interval'] = int(args.print_epoch_interval)
     if args.max_time is not None:
         params['max_time'] = float(args.max_time)
-    # network parameters
+
+    # Network parameters
     net_params = config['net_params']
     net_params['device'] = device
     net_params['gpu_id'] = config['gpu']['id']
@@ -399,8 +376,6 @@ def main():
     if args.attention_pe is not None:
         net_params['attention_pe'] = args.node_pe
 
-    net_params['use_node_pe'] = (net_params['node_pe'] in NodePositionalEmbeddings.keys())
-    net_params['use_attention_pe'] = (net_params['attention_pe'] in AttentionPositionalEmbeddings.keys())
     # ZINC
     # FIXME
     # net_params['num_atom_type'] = dataset.num_atom_type
@@ -421,9 +396,7 @@ def main():
     if not os.path.exists(out_dir + 'configs'):
         os.makedirs(out_dir + 'configs')
 
-    net_params['total_param'] = view_model_param(MODEL_NAME, net_params)
+    # net_params['total_param'] = view_model_param(MODEL_NAME, net_params)
     train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs)
-
-    
-    
+   
 main()
