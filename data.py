@@ -16,9 +16,8 @@ class GraphDataset(object):
         self.attention_pe_list = None
         self.adj_matrix_list = None
         self.degree_list = None
-        # if pe == 'adj':
-        #     print('Computing positional encodings')
-        self.compute_pe()
+        self.use_node_pe = False
+        self.use_attention_pe = False
         if degree:
             self.compute_degree()
 
@@ -27,15 +26,10 @@ class GraphDataset(object):
 
     def __getitem__(self, index):
         data = self.dataset[index]
-        if self.node_pe_list is not None and len(self.node_pe_list) == len(self.dataset):
+        if self.use_node_pe:
             data.node_pe = self.node_pe_list[index]
+        if self.use_attention_pe:
             data.attention_pe = self.attention_pe_list[index]
-            #print('pe: ', data.pe.size())
-            #print('x: ', data.x.size())
-        # if self.adj_matrix_list is not None and len(self.adj_matrix_list) == len(self.dataset):
-        #     data.adj_matrix = self.adj_matrix_list[index]
-        # if self.degree_list is not None and len(self.degree_list) == len(self.dataset):
-        #     data.degree = self.degree_list[index]
         return data
 
     def compute_degree(self):
@@ -44,44 +38,38 @@ class GraphDataset(object):
             deg = 1. / torch.sqrt(1. + utils.degree(g.edge_index[0], g.num_nodes))
             self.degree_list.append(deg)
 
-    def compute_pe(self):
+    def compute_node_pe(self, node_pe):
+        '''
+        Takes as argument a function returning a nodewise positional embedding from a graph
+        '''
         self.node_pe_list = []
+        for i, g in enumerate(self.dataset):
+            self.node_pe_list.append(node_pe(g))
+        self.use_node_pe = True
+        self.node_pe_dimension = node_pe.get_embedding_dimension()
+
+    def compute_attention_pe(self, attention_pe):
         self.attention_pe_list = []
         for i, g in enumerate(self.dataset):
-            node_pe, attention_pe = compute_pe_RW(g)
-            self.node_pe_list.append(node_pe)
-            self.attention_pe_list.append(attention_pe)
-            # adj_matrix = utils.to_dense_adj(g.edge_index, g.edge_attr).squeeze()
-            # # g.adj_matrix = adj_matrix
-            # self.adj_matrix_list.append(adj_matrix)
-            # pe = (adj_matrix > 0)
-            # # Normalize by degree
-            # pe = pe * (pe.sum(-1, keepdim=True) ** -0.5)
-            # self.pe_list.append(pe)
-            # # g.pe = pe
-            # self.dataset[i] = g
+            self.attention_pe_list.append(attention_pe(g))
+        self.use_attention_pe = True
 
     def collate_fn(self):
         def collate(batch):
             batch = list(batch)
             max_len = max(len(g.x) for g in batch)
             dense_transform = ToDense(max_len)
-            #print([len(g.x) for g in batch])
-            #print(max_len)
 
             padded_x = torch.zeros((len(batch), max_len), dtype=int)
-            padded_p = torch.zeros((len(batch), max_len, 16), dtype=float)
             padded_adj = torch.zeros((len(batch), max_len, max_len), dtype=int)
             mask = torch.zeros((len(batch), max_len), dtype=bool)
             labels = []
-
-            # TODO: check if position encoding matrix is sparse
-            # if it's the case, use a huge sparse matrix
-            # else use a dense tensor
-            pos_enc = None
-            use_pe = True # hasattr(batch[0], 'pe') and batch[0].pe is not None
-            if use_pe:
-                pos_enc = torch.zeros((len(batch), max_len, max_len))
+            attention_pe = None
+            padded_p = None
+            if self.use_node_pe:
+                padded_p = torch.zeros((len(batch), max_len, self.node_pe_dimension), dtype=float)
+            if self.use_attention_pe:
+                attention_pe = torch.zeros((len(batch), max_len, max_len))
 
             for i, g in enumerate(batch):
                 labels.append(g.y.view(-1))
@@ -89,11 +77,12 @@ class GraphDataset(object):
                 g = dense_transform(g)
                 padded_x[i] = g.x.squeeze()
                 padded_adj[i] = g.adj.squeeze()
-                padded_p[i, :num_nodes] = g.node_pe
                 mask[i] = g.mask
-                if use_pe:
-                    pos_enc[i, :num_nodes, :num_nodes] = g.attention_pe
-            return padded_x, padded_adj, padded_p.float(), mask, pos_enc, default_collate(labels)
+                if self.use_node_pe:
+                    padded_p[i, :num_nodes] = g.node_pe
+                if self.use_attention_pe:
+                    attention_pe[i, :num_nodes, :num_nodes] = g.attention_pe
+            return padded_x, padded_adj, padded_p, mask, attention_pe, default_collate(labels)
         return collate
 
 
@@ -107,22 +96,8 @@ def compute_pe(graph):
     graph.pe = pe
     return graph
 
-def compute_pe_RW(graph, p=16):
-    num_nodes = len(graph.x)
-    A = utils.to_dense_adj(graph.edge_index).squeeze()
-    D = A.sum(dim=-1)
-    RW = A / D
-    RW_power = RW
-    node_pe = torch.zeros((num_nodes, p))
-    node_pe[:, 0] = RW.diagonal()
-    for power in range(p-1):
-        RW_power = RW @ RW_power
-        node_pe[:, power + 1] = RW_power.diagonal()
-    I = torch.eye(num_nodes)
-    L = I - RW
-    attention_pe = I - 0.25 * L
-    return node_pe, attention_pe
 
+# TO IMPLEMENT IN CLASS DiffusionAttentionPE ad then delete
 def compute_pe_diffusion(graph, beta=0.5):
     num_nodes = len(graph.x)
     A = utils.to_dense_adj(graph.edge_index).squeeze()
@@ -134,3 +109,64 @@ def compute_pe_diffusion(graph, beta=0.5):
     attention_pe = expm(-beta * L)
     node_pe = attention_pe
     return node_pe, attention_pe
+
+class RandomWalkNodePE(object):
+    '''
+    Returns a p_step-dimensional vector p for each node,
+    with p_i = RW^i, the probability of landing back on that node after i steps in the graph
+    '''
+    def __init__(self, **parameters):
+        self.p_steps = parameters.get('p_steps', 16)
+
+    def get_embedding_dimension(self):
+        return self.p_steps
+
+    def __call__(self, graph):
+        num_nodes = len(graph.x)
+        A = utils.to_dense_adj(graph.edge_index).squeeze()
+        D = A.sum(dim=-1)
+        RW = A / D
+        RW_power = RW
+        node_pe = torch.zeros((num_nodes, self.p_steps))
+        node_pe[:, 0] = RW.diagonal()
+        for power in range(self.p_steps-1):
+            RW_power = RW @ RW_power
+            node_pe[:, power + 1] = RW_power.diagonal()
+        return node_pe
+
+class RandomWalkAttentionPE(object):
+
+    def __init__(self, **parameters):
+        self.p_steps = parameters.get('p_steps', 16)
+        self.beta = parameters.get('beta', 0.25)
+
+    def __call__(self, graph):
+        num_nodes = len(graph.x)
+        A = utils.to_dense_adj(graph.edge_index).squeeze()
+        RW = A / A.sum(dim=-1) # A D^-1
+        I = torch.eye(num_nodes)
+        L = I - RW
+        k_RW = I - self.beta * L
+        k_RW_power = k_RW
+        for power in range(self.p_steps-1):
+            k_RW_power = k_RW_power @ k_RW
+        return k_RW_power
+
+class AdjacencyAttentionPE(object):
+
+    def __init__(self, **parameters):
+        pass
+
+    def __call__(self, graph):
+        A = utils.to_dense_adj(graph.edge_index).squeeze()
+        return A
+
+NodePositionalEmbeddings = {
+    'rand_walk': RandomWalkNodePE
+}
+
+AttentionPositionalEmbeddings = {
+    'rand_walk': RandomWalkAttentionPE,
+    'adj': AdjacencyAttentionPE,
+}
+

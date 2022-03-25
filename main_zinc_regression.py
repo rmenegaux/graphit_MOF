@@ -8,41 +8,24 @@
 """
 import numpy as np
 import os
-import socket
 import time
 import random
 import glob
 import argparse, json
-import pickle
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
 from tqdm import tqdm
 
-import matplotlib
-import matplotlib.pyplot as plt
-
-
-class DotDict(dict):
-    def __init__(self, **kwds):
-        self.update(kwds)
-        self.__dict__ = self
-
-
-
-
-
 
 """
     IMPORTING CUSTOM MODULES/METHODS
 """
 from transformer_net import GraphiTNet
-from data import GraphDataset, compute_pe
+from data import GraphDataset, compute_pe, NodePositionalEmbeddings, AttentionPositionalEmbeddings
 
 
 """
@@ -61,28 +44,20 @@ def gpu_setup(use_gpu, gpu_id):
     return device
 
 
-
-
 #!/usr/bin/env python
 # coding: utf-8
 
-import torch
 from torch_geometric.data import Data
 from torch_geometric.datasets import ZINC
 from torch.utils.tensorboard import SummaryWriter
-import torch.nn.functional as F
-
-import numpy as np
-from timeit import default_timer as timer
 
 save_run_tensorboard = True
 
 """
     VIEWING MODEL CONFIG AND PARAMS
 """
-def view_model_param(MODEL_NAME, net_params):
+def view_model_param(model, MODEL_NAME):
     # model = gnn_model(MODEL_NAME, net_params)
-    model = GraphiTNet(net_params)
     total_param = 0
     print("MODEL DETAILS:\n")
     #print(model)
@@ -102,43 +77,39 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     per_epoch_time = []
         
     DATASET_NAME = 'ZINC'
-    # DATASET_NAME = dataset.name
-    
-    # if net_params['pe_init'] == 'lap_pe':
-    #     tt = time.time()
-    #     print("[!] -LapPE: Initializing graph positional encoding with Laplacian PE.")
-    #     dataset._add_lap_positional_encodings(net_params['pos_enc_dim'])
-    #     print("[!] Time taken: ", time.time()-tt)
-    # elif net_params['pe_init'] == 'rand_walk':
-    #     tt = time.time()
-    #     print("[!] -LSPE: Initializing graph positional encoding with rand walk features.")
-    #     dataset._init_positional_encodings(net_params['pos_enc_dim'], net_params['pe_init'])
-    #     print("[!] Time taken: ", time.time()-tt)
-        
-    #     tt = time.time()
-    #     print("[!] -LSPE (For viz later): Adding lapeigvecs to key 'eigvec' for every graph.")
-    #     dataset._add_eig_vecs(net_params['pos_enc_dim'])
-    #     print("[!] Time taken: ", time.time()-tt)
-        
-    # if MODEL_NAME in ['SAN', 'GraphiT']:
-    #     if net_params['full_graph']:
-    #         st = time.time()
-    #         print("[!] Adding full graph connectivity..")
-    #         dataset._make_full_graph() if MODEL_NAME == 'SAN' else dataset._make_full_graph((net_params['p_steps'], net_params['gamma']))
-    #         print('Time taken to add full graph connectivity: ',time.time()-st)
-    
-    # trainset, valset, testset = dataset.train, dataset.val, dataset.test
+
     trainset = GraphDataset(dataset['train'])
     valset = GraphDataset(dataset['val'])
     testset = GraphDataset(dataset['test'])
+
+    # Initialize node positional embeddings
+    node_pe_params = net_params['node_pe_params']
+    attention_pe_params = net_params['attention_pe_params']
+
+    if net_params['use_node_pe']:
+        node_pe_params = net_params['node_pe_params']
+        if (node_pe_params['node_pe'] not in NodePositionalEmbeddings.keys()):
+            print('{} is not a recognized node positional embedding, defaulting to none')
+            net_params['use_node_pe'] = False
+        else:
+            NodePE = NodePositionalEmbeddings[node_pe_params['node_pe']](**node_pe_params)
+            net_params['pos_enc_dim'] = NodePE.get_embedding_dimension()
+            for dset in [trainset, valset, testset]:
+                dset.compute_node_pe(NodePE)
+    # Pre-compute attention relative positional embeddings
+    if net_params['use_attention_pe']:
+        attention_pe_params = net_params['attention_pe_params']
+        if (attention_pe_params['attention_pe'] not in AttentionPositionalEmbeddings.keys()):
+            print('{} is not a recognized attention positional embedding, defaulting to none')
+            net_params['use_attention_pe'] = False
+        else:
+            AttentionPE = AttentionPositionalEmbeddings[attention_pe_params['attention_pe']](**attention_pe_params)
+            for dset in [trainset, valset, testset]:
+                dset.compute_attention_pe(AttentionPE)
         
     root_log_dir, root_ckpt_dir, write_file_name, write_config_file, viz_dir = dirs
     device = net_params['device']
-    
-    # Write the network and optimization hyper-parameters in folder config/
-    with open(write_config_file + '.txt', 'w') as f:
-        f.write("""Dataset: {},\nModel: {}\n\nparams={}\n\nnet_params={}\n\n\nTotal Parameters: {}\n\n"""                .format(DATASET_NAME, MODEL_NAME, params, net_params, net_params['total_param']))
-        
+       
     log_dir = os.path.join(root_log_dir, "RUN_" + str(0))
     if save_run_tensorboard:
         writer = SummaryWriter(log_dir=log_dir)
@@ -159,6 +130,11 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
 
     # model = gnn_model(MODEL_NAME, net_params)
     model = GraphiTNet(net_params)
+    net_params['total_param'] = view_model_param(model, MODEL_NAME)
+    # Write the network and optimization hyper-parameters in folder config/
+    with open(write_config_file + '.txt', 'w') as f:
+        f.write("""Dataset: {},\nModel: {}\n\nparams={}\n\nnet_params={}\n\n\nTotal Parameters: {}\n\n"""                .format(DATASET_NAME, MODEL_NAME, params, net_params, net_params['total_param']))
+
     model = model.to(device)
 
     optimizer = optim.Adam(model.parameters(), lr=params['init_lr'], weight_decay=params['weight_decay'])
@@ -266,8 +242,6 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
         
 
 
-
-
 def main():    
     """
         USER CONTROLS
@@ -303,10 +277,10 @@ def main():
     parser.add_argument('--batch_norm', help="Please give a value for batch_norm")
     parser.add_argument('--max_time', help="Please give a value for max_time")
     parser.add_argument('--pos_enc_dim', help="Please give a value for pos_enc_dim")
-    parser.add_argument('--pos_enc', help="Please give a value for pos_enc")
+    parser.add_argument('--node_pe', help="Please give a value for node_pe")
+    parser.add_argument('--attention_pe', help="Please give a value for attention_pe")
     parser.add_argument('--update_pos_enc', help="Please give a value for update_pos_enc")
     parser.add_argument('--concat_h_p', help="Please give a value for concat_h_p")
-    parser.add_argument('--pe_init', help="Please give a value for pe_init")
     args = parser.parse_args()
     with open(args.config) as f:
         config = json.load(f)
@@ -338,7 +312,8 @@ def main():
         out_dir = args.out_dir
     else:
         out_dir = config['out_dir']
-    # parameters
+
+    # Training parameters
     params = config['params']
     if args.seed is not None:
         params['seed'] = int(args.seed)
@@ -360,7 +335,8 @@ def main():
         params['print_epoch_interval'] = int(args.print_epoch_interval)
     if args.max_time is not None:
         params['max_time'] = float(args.max_time)
-    # network parameters
+
+    # Network parameters
     net_params = config['net_params']
     net_params['device'] = device
     net_params['gpu_id'] = config['gpu']['id']
@@ -393,27 +369,19 @@ def main():
         net_params['layer_norm'] = True if args.layer_norm=='True' else False
     if args.batch_norm is not None:
         net_params['batch_norm'] = True if args.batch_norm=='True' else False
-    if args.pos_enc is not None:
-        net_params['pos_enc'] = True if args.pos_enc=='True' else False
     if args.pos_enc_dim is not None:
         net_params['pos_enc_dim'] = int(args.pos_enc_dim)
-    if args.pe_init is not None:
-        net_params['pe_init'] = args.pe_init
-        
-    
+    if args.node_pe is not None:
+        net_params['node_pe'] = args.node_pe
+    if args.attention_pe is not None:
+        net_params['attention_pe'] = args.node_pe
+
     # ZINC
     # FIXME
     # net_params['num_atom_type'] = dataset.num_atom_type
     # net_params['num_bond_type'] = dataset.num_bond_type
     net_params['num_atom_type'] = len(np.unique(zinc_dataset_train.data.x))
     net_params['num_bond_type'] = len(np.unique(zinc_dataset_train.data.edge_attr))
-
-    if MODEL_NAME == 'PNA':
-        D = torch.cat([torch.sparse.sum(g.adjacency_matrix(transpose=True), dim=-1).to_dense() for g in
-                       dataset.train.graph_lists])
-        net_params['avg_d'] = dict(lin=torch.mean(D),
-                                   exp=torch.mean(torch.exp(torch.div(1, D)) - 1),
-                                   log=torch.mean(torch.log(D + 1)))
     
     root_log_dir = out_dir + 'logs/' + MODEL_NAME + "_" + DATASET_NAME + "_GPU" + str(config['gpu']['id']) + "_" + time.strftime('%Hh%Mm%Ss_on_%b_%d_%Y')
     root_ckpt_dir = out_dir + 'checkpoints/' + MODEL_NAME + "_" + DATASET_NAME + "_GPU" + str(config['gpu']['id']) + "_" + time.strftime('%Hh%Mm%Ss_on_%b_%d_%Y')
@@ -428,9 +396,7 @@ def main():
     if not os.path.exists(out_dir + 'configs'):
         os.makedirs(out_dir + 'configs')
 
-    net_params['total_param'] = view_model_param(MODEL_NAME, net_params)
+    # net_params['total_param'] = view_model_param(MODEL_NAME, net_params)
     train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs)
-
-    
-    
+   
 main()

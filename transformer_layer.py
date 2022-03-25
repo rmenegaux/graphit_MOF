@@ -15,14 +15,14 @@ import numpy as np
 
 class MultiHeadAttentionLayer(nn.Module):
     def __init__(self, in_dim, in_dim_edges, out_dim, num_heads, double_attention=False,
-                 use_bias=False, adaptive_edge_PE=True, use_edge_features=False):
+                 use_bias=False, use_attention_pe=True, use_edge_features=False):
         super().__init__()
         
         self.out_dim = out_dim
         self.num_heads = num_heads
         self.double_attention = double_attention
         self.use_edge_features = use_edge_features
-        self.adaptive_edge_PE = adaptive_edge_PE
+        self.use_attention_pe = use_attention_pe
         
         self.Q = nn.Linear(in_dim, out_dim * num_heads, bias=use_bias)
         self.K = nn.Linear(in_dim, out_dim * num_heads, bias=use_bias)
@@ -98,7 +98,7 @@ class MultiHeadAttentionLayer(nn.Module):
         if mask is not None:
             scores = scores * mask.view(-1, 1, num_nodes, 1) * mask.view(-1, 1, 1, num_nodes)
 
-        if self.adaptive_edge_PE:
+        if self.use_attention_pe:
             # Introduce new dimension for the different heads
             k_RW = k_RW.unsqueeze(1)
             scores = scores * k_RW
@@ -120,7 +120,7 @@ class GraphiT_GT_Layer(nn.Module):
     """
     def __init__(self, in_dim, out_dim, num_heads, **layer_params):
                 #  double_attention=False, dropout=0.0,
-                #  layer_norm=False, batch_norm=True, residual=True, adaptive_edge_PE=False,
+                #  layer_norm=False, batch_norm=True, residual=True, use_attention_pe=False,
                 #  use_edge_features=True, update_edge_features=False, update_pos_enc=False, use_bias=False
         super().__init__()
         
@@ -133,14 +133,15 @@ class GraphiT_GT_Layer(nn.Module):
         self.batch_norm = layer_params['batch_norm']
         self.feedforward = layer_params['feedforward']
         self.update_edge_features = layer_params['update_edge_features']
+        self.use_node_pe = layer_params['use_node_pe']
         self.update_pos_enc = layer_params['update_pos_enc']
         self.concat_h_p = layer_params['concat_h_p']
 
         attention_params = {
-            param: layer_params[param] for param in ['double_attention', 'use_bias', 'adaptive_edge_PE', 'use_edge_features']
+            param: layer_params[param] for param in ['double_attention', 'use_bias', 'use_attention_pe', 'use_edge_features']
         }
         # in_dim*2 if positional embeddings are concatenated rather than summed
-        in_dim_h = in_dim*2 if self.concat_h_p else in_dim
+        in_dim_h = in_dim*2 if (self.use_node_pe and self.concat_h_p) else in_dim
         self.attention_h = MultiHeadAttentionLayer(in_dim_h, in_dim, out_dim//num_heads, num_heads, **attention_params)
         self.O_h = nn.Linear(out_dim, out_dim)
         
@@ -178,11 +179,9 @@ class GraphiT_GT_Layer(nn.Module):
         e_in = e
         B1_h = self.B1(h).unsqueeze(1)
         B2_h = self.B2(h).unsqueeze(2)
-        # n_batch, n_nodes, n_features = B1_h.size()
-        E12 = self.E12(e) #.reshape(n_batch, n_nodes, n_nodes, n_features)
-        # e = torch.einsum('bik,bjk,bijk->bijk', B1_h, B2_h, E12)
+        E12 = self.E12(e)
+
         e = B1_h + B2_h + E12
-        #e_out = e_out.reshape(n_batch, n_nodes * n_nodes, n_features)
         # e = self.batch_norm_e(e)
         e = e_in + F.relu(e)
         return e
@@ -229,17 +228,15 @@ class GraphiT_GT_Layer(nn.Module):
         
         # [START] For calculation of h -----------------------------------------------------------------
         
-        if self.concat_h_p:
+        if self.use_node_pe and self.concat_h_p:
             h = torch.cat((h, p), dim=-1)
-        elif p is not None:
+        elif self.use_node_pe:
             h = h + p
         # multi-head attention out
         h = self.attention_h(h, e, k_RW=k_RW, mask=mask, adj=adj)
         
         if self.update_edge_features: 
             e = self.forward_edges(h_in1, e)
-        # #Concat multi-head outputs
-        # h = h_attn_out.view(-1, self.out_channels)
        
         h = F.dropout(h, self.dropout, training=self.training)
 
@@ -258,9 +255,8 @@ class GraphiT_GT_Layer(nn.Module):
         if self.feedforward:
             h = self.feed_forward_block(h)         
                 
-        if self.update_pos_enc:
+        if self.use_node_pe and self.update_pos_enc:
             p = self.forward_p(p, e, k_RW=k_RW, mask=mask, adj=adj)
-            # TODO: check if this is the right place, or if we should put it before the batch norm for ex
 
         return h, p, e
         
