@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from torch.utils.data.dataloader import default_collate
 import torch_geometric.utils as utils
 from torch_geometric.transforms import ToDense
+from scipy.linalg import expm
 
 
 class GraphDataset(object):
@@ -120,4 +121,16 @@ def compute_pe_RW(graph, p=16):
     I = torch.eye(num_nodes)
     L = I - RW
     attention_pe = I - 0.25 * L
+    return node_pe, attention_pe
+
+def compute_pe_diffusion(graph, beta=0.5):
+    num_nodes = len(graph.x)
+    A = utils.to_dense_adj(graph.edge_index).squeeze()
+    D = A.sum(dim=-1)
+    # rw norm!
+    RW = A / D
+    I = torch.eye(num_nodes)
+    L = I - RW
+    attention_pe = expm(-beta * L)
+    node_pe = attention_pe
     return node_pe, attention_pe
