@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from torch.utils.data.dataloader import default_collate
 import torch_geometric.utils as utils
 from torch_geometric.transforms import ToDense
+from scipy.linalg import expm
 
 
 class GraphDataset(object):
@@ -146,11 +147,29 @@ class AdjacencyAttentionPE(object):
         A = utils.to_dense_adj(graph.edge_index).squeeze()
         return A
 
+
+class DiffusionAttentionPe(object):
+    def __init__(self, **parameters):
+        self.beta = parameters.get('beta', 0.5)
+
+    def __call__(self, graph):
+        num_nodes = len(graph.x)
+        A = utils.to_dense_adj(graph.edge_index).squeeze()
+        D = A.sum(dim=-1)
+        # rw norm!
+        RW = A / D
+        I = torch.eye(num_nodes)
+        L = I - RW
+        attention_pe = expm(-self.beta * L.numpy())
+        return torch.from_numpy(attention_pe)
+
 NodePositionalEmbeddings = {
     'rand_walk': RandomWalkNodePE
 }
 
 AttentionPositionalEmbeddings = {
+    'diffusion': DiffusionAttentionPe,
     'rand_walk': RandomWalkAttentionPE,
     'adj': AdjacencyAttentionPE,
 }
+

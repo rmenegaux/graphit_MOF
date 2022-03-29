@@ -1,0 +1,5 @@
+oarsub_gcn_train.sh
+out_oar/*
+out/*
+oarsub_gcn_train.sh
+*.pyc
