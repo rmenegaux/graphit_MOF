@@ -96,20 +96,6 @@ def compute_pe(graph):
     graph.pe = pe
     return graph
 
-
-# TO IMPLEMENT IN CLASS DiffusionAttentionPE ad then delete
-def compute_pe_diffusion(graph, beta=0.5):
-    num_nodes = len(graph.x)
-    A = utils.to_dense_adj(graph.edge_index).squeeze()
-    D = A.sum(dim=-1)
-    # rw norm!
-    RW = A / D
-    I = torch.eye(num_nodes)
-    L = I - RW
-    attention_pe = expm(-beta * L)
-    node_pe = attention_pe
-    return node_pe, attention_pe
-
 class RandomWalkNodePE(object):
     '''
     Returns a p_step-dimensional vector p for each node,
@@ -161,11 +147,28 @@ class AdjacencyAttentionPE(object):
         A = utils.to_dense_adj(graph.edge_index).squeeze()
         return A
 
+
+class DiffusionAttentionPe(object):
+    def __init__(self, **parameters):
+        self.beta = parameters.get('beta', 0.5)
+
+    def __call__(self, graph):
+        num_nodes = len(graph.x)
+        A = utils.to_dense_adj(graph.edge_index).squeeze()
+        D = A.sum(dim=-1)
+        # rw norm!
+        RW = A / D
+        I = torch.eye(num_nodes)
+        L = I - RW
+        attention_pe = expm(-self.beta * L.numpy())
+        return torch.from_numpy(attention_pe)
+
 NodePositionalEmbeddings = {
     'rand_walk': RandomWalkNodePE
 }
 
 AttentionPositionalEmbeddings = {
+    'diffusion': DiffusionAttentionPe,
     'rand_walk': RandomWalkAttentionPE,
     'adj': AdjacencyAttentionPE,
 }
