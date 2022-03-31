@@ -2,3 +2,6 @@
 out_oar/*
 out/*
 *.pyc
+*.pyc
+*.pyx
+*.so
