@@ -170,6 +170,8 @@ class GraphiT_GT_Layer(nn.Module):
             self.B1 = nn.Linear(out_dim, out_dim)
             self.B2 = nn.Linear(out_dim, out_dim)
             self.E12 = nn.Linear(out_dim, out_dim)
+            #if self.layer_norm:
+            self.layer_norm_e = nn.LayerNorm(out_dim)
             # self.batch_norm_e = nn.BatchNorm1d(out_dim)
 
     def forward_edges(self, h, e):
@@ -184,6 +186,8 @@ class GraphiT_GT_Layer(nn.Module):
         e = B1_h + B2_h + E12
         # e = self.batch_norm_e(e)
         e = e_in + F.relu(e)
+        # e = e_in + torch.tanh(e)
+        e = self.layer_norm_e(e)
         return e
 
     def forward_p(self, p, e, k_RW=None, mask=None, adj=None):

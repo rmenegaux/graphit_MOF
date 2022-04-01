@@ -20,6 +20,8 @@ def global_pooling(x, readout='mean'):
         return x.max(dim=1)
     elif readout == 'sum':
         return x.sum(dim=1)
+    elif readout == 'first':
+        return x[:, 0, :]
 
 
 class GraphiTNet(nn.Module):
@@ -76,6 +78,7 @@ class GraphiTNet(nn.Module):
             GraphiT_GT_Layer(GT_hidden_dim, GT_hidden_dim, GT_n_heads, **layer_params) for _ in range(GT_layers-1)
             ])
         layer_params['use_attention_pe'] = False # Last layer with full vanilla attention
+        layer_params['update_edge_features'] = False
         self.layers.append(
             GraphiT_GT_Layer(GT_hidden_dim, GT_out_dim, GT_n_heads, **layer_params)
             )
@@ -107,7 +110,7 @@ class GraphiTNet(nn.Module):
             h, p, e = conv(h, p, e, k_RW=k_RW, mask=mask, adj=adj)
             # This part should probably be moved to the DataLoader:
             # if self.use_attention_pe:
-            #     k_RW = torch.matmul(k_RW, k_RW_0)
+            #    k_RW = torch.matmul(k_RW, k_RW_0)
         
         if self.use_node_pe:
             p = self.p_out(p)

@@ -82,6 +82,11 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     valset = GraphDataset(dataset['val'])
     testset = GraphDataset(dataset['test'])
 
+    # Add virtual node connected to everyone
+    if net_params['virtual_node'] == True:
+        for dset in [trainset, valset, testset]:
+            dset.add_virtual_nodes()
+
     # Initialize node positional embeddings
     node_pe_params = net_params['node_pe_params']
     attention_pe_params = net_params['attention_pe_params']
@@ -377,17 +382,19 @@ def main():
         net_params['attention_pe'] = args.node_pe
 
     # ZINC
-    # FIXME
+    # FIXME: move this to data.py
     # net_params['num_atom_type'] = dataset.num_atom_type
     # net_params['num_bond_type'] = dataset.num_bond_type
-    net_params['num_atom_type'] = len(np.unique(zinc_dataset_train.data.x))
-    net_params['num_bond_type'] = len(np.unique(zinc_dataset_train.data.edge_attr))
+    net_params['num_atom_type'] = len(np.unique(zinc_dataset_train.data.x)) + (net_params['virtual_node'] == True)
+    net_params['num_bond_type'] = len(np.unique(zinc_dataset_train.data.edge_attr)) + (net_params['virtual_node'] == True)
+
+    experiment_name = MODEL_NAME + "_" + DATASET_NAME + "_GPU" + str(config['gpu']['id']) + "_" + time.strftime('%Hh%Mm%Ss_on_%b_%d_%Y')
     
-    root_log_dir = out_dir + 'logs/' + MODEL_NAME + "_" + DATASET_NAME + "_GPU" + str(config['gpu']['id']) + "_" + time.strftime('%Hh%Mm%Ss_on_%b_%d_%Y')
-    root_ckpt_dir = out_dir + 'checkpoints/' + MODEL_NAME + "_" + DATASET_NAME + "_GPU" + str(config['gpu']['id']) + "_" + time.strftime('%Hh%Mm%Ss_on_%b_%d_%Y')
-    write_file_name = out_dir + 'results/result_' + MODEL_NAME + "_" + DATASET_NAME + "_GPU" + str(config['gpu']['id']) + "_" + time.strftime('%Hh%Mm%Ss_on_%b_%d_%Y')
-    write_config_file = out_dir + 'configs/config_' + MODEL_NAME + "_" + DATASET_NAME + "_GPU" + str(config['gpu']['id']) + "_" + time.strftime('%Hh%Mm%Ss_on_%b_%d_%Y')
-    viz_dir = out_dir + 'viz/' + MODEL_NAME + "_" + DATASET_NAME + "_GPU" + str(config['gpu']['id']) + "_" + time.strftime('%Hh%Mm%Ss_on_%b_%d_%Y')
+    root_log_dir = out_dir + 'logs/' + experiment_name
+    root_ckpt_dir = out_dir + 'checkpoints/' + experiment_name
+    write_file_name = out_dir + 'results/result_' + experiment_name
+    write_config_file = out_dir + 'configs/config_' + experiment_name
+    viz_dir = out_dir + 'viz/' + experiment_name
     dirs = root_log_dir, root_ckpt_dir, write_file_name, write_config_file, viz_dir
 
     if not os.path.exists(out_dir + 'results'):

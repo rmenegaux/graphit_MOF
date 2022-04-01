@@ -3,15 +3,14 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data.dataloader import default_collate
 import torch_geometric.utils as utils
-from torch_geometric.transforms import ToDense
-from scipy.linalg import expm
+from torch_geometric.transforms import ToDense #, VirtualNode
 
 
 class GraphDataset(object):
     def __init__(self, dataset, pe='adj', degree=False):
         """a pytorch geometric dataset as input
         """
-        self.dataset = dataset
+        self.dataset = list(dataset)
         self.node_pe_list = None
         self.attention_pe_list = None
         self.adj_matrix_list = None
@@ -31,6 +30,11 @@ class GraphDataset(object):
         if self.use_attention_pe:
             data.attention_pe = self.attention_pe_list[index]
         return data
+
+    def add_virtual_nodes(self):
+        AddVirtualNode = VirtualNode()
+        for i, g in enumerate(self.dataset):
+            self.dataset[i] = AddVirtualNode(g, x_fill=21, edge_attr_fill=4)
 
     def compute_degree(self):
         self.degree_list = []
@@ -125,6 +129,7 @@ class RandomWalkAttentionPE(object):
     def __init__(self, **parameters):
         self.p_steps = parameters.get('p_steps', 16)
         self.beta = parameters.get('beta', 0.25)
+        self.zero_diag = parameters.get('zero_diag', False)
 
     def __call__(self, graph):
         num_nodes = len(graph.x)
@@ -136,6 +141,8 @@ class RandomWalkAttentionPE(object):
         k_RW_power = k_RW
         for power in range(self.p_steps-1):
             k_RW_power = k_RW_power @ k_RW
+        if self.zero_diag:
+            k_RW_power = k_RW_power * (1 - I)
         return k_RW_power
 
 class AdjacencyAttentionPE(object):
@@ -145,7 +152,7 @@ class AdjacencyAttentionPE(object):
 
     def __call__(self, graph):
         A = utils.to_dense_adj(graph.edge_index).squeeze()
-        return A
+        return A / A.sum(dim=-1)
 
 
 class DiffusionAttentionPe(object):
@@ -173,3 +180,85 @@ AttentionPositionalEmbeddings = {
     'adj': AdjacencyAttentionPE,
 }
 
+import torch
+from torch import Tensor
+
+from torch_geometric.data import Data
+# from torch_geometric.data.datapipes import functional_transform
+# from torch_geometric.transforms import BaseTransform
+
+class BaseTransform:
+    """
+    Was getting an import error when importing this class, here it is gain
+    """
+    def __call__(self, data):
+        raise NotImplementedError
+
+    def __repr__(self) -> str:
+        return f'{self.__class__.__name__}()'
+
+# @functional_transform('virtual_node')
+class VirtualNode(BaseTransform):
+    r"""Appends a virtual node to the given homogeneous graph that is connected
+    to all other nodes, as described in the `"Neural Message Passing for
+    Quantum Chemistry" <https://arxiv.org/abs/1704.01212>`_ paper
+    
+    Recoded to accomodate for old version of torch-geometric
+    """
+    def __call__(self, data: Data, edge_attr_fill=0, x_fill=0) -> Data:
+        num_nodes, (row, col) = data.num_nodes, data.edge_index
+        # "Data has no attribute get"
+        #edge_type = data.__dict__.get('edge_type', torch.zeros_like(row))
+
+        arange = torch.arange(num_nodes, device=row.device)
+        full = row.new_full((num_nodes, ), num_nodes)
+        row = torch.cat([row, arange, full], dim=0)
+        col = torch.cat([col, full, arange], dim=0)
+        edge_index = torch.stack([row, col], dim=0)
+
+        # new_type = edge_type.new_full((num_nodes, ), int(edge_type.max()) + 1)
+        # edge_type = torch.cat([edge_type, new_type, new_type + 1], dim=0)
+
+        for key, value in data.__iter__():
+        # for key, value in data.items():
+            # if key == 'edge_index' or key == 'edge_type':
+            if key == 'edge_index' or key == 'edge_type' or key == 'edge_attr':
+                continue
+
+            if isinstance(value, Tensor):
+                dim = data.__cat_dim__(key, value)
+                size = list(value.size())
+
+                fill_value = None
+                if key == 'edge_weight':
+                    size[dim] = 2 * num_nodes
+                    fill_value = 1.
+                elif key == 'edge_attr':
+                    size[dim] = 2 * num_nodes
+                    # In PyG, fill_value is 0, we use a new value to distinguish it from 
+                    # non-connected nodes after densification of the adjacency
+                    # fill_value = 0.
+                    fill_value = edge_attr_fill
+                elif key == 'x':
+                    size[dim] = 1
+                    # fill_value = 0.
+                    fill_value = x_fill
+
+                if fill_value is not None:
+                    new_value = value.new_full(size, fill_value)
+                    # We change the order from the original pytorch geometric 
+                    # to enable easy access to the virtual node (data.x[0])
+                    data[key] = torch.cat([new_value, value], dim=dim)
+                    # data[key] = torch.cat([value, new_value], dim=dim)
+
+        #data.edge_index = edge_index
+        full = row.new_full((2, 2), num_nodes)
+        data.edge_index = torch.cat([data.edge_index, full], dim=1)
+        full = row.new_full((2, ), 0.)
+        data.edge_attr = torch.cat([data.edge_attr, full], dim=0)
+        #data.edge_type = edge_type
+
+        if 'num_nodes' in data:
+            data.num_nodes = data.num_nodes + 1
+
+        return data
