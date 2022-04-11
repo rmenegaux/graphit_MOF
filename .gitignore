@@ -5,3 +5,4 @@ out/*
 *.pyc
 *.pyx
 *.so
+scripts_margot/*
