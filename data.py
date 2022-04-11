@@ -44,7 +44,7 @@ class GraphDataset(object):
         '''
         self.node_pe_list = []
         for i, g in enumerate(self.dataset):
-            self.node_pe_list.append(node_pe(g))
+            self.node_pe_list.append(node_pe(i, g))
         self.use_node_pe = True
         self.node_pe_dimension = node_pe.get_embedding_dimension()
 
@@ -59,9 +59,11 @@ class GraphDataset(object):
             batch = list(batch)
             max_len = max(len(g.x) for g in batch)
             dense_transform = ToDense(max_len)
+            input_size = batch[0].x.shape[1]
+            edge_input_size = 1 if batch[0].edge_attr.dim() == 1 else batch[0].edge_attr.shape[1]
 
-            padded_x = torch.zeros((len(batch), max_len), dtype=int)
-            padded_adj = torch.zeros((len(batch), max_len, max_len), dtype=int)
+            padded_x = torch.zeros((len(batch), max_len, input_size), dtype=int)
+            padded_adj = torch.zeros((len(batch), max_len, max_len, edge_input_size), dtype=int).squeeze()
             mask = torch.zeros((len(batch), max_len), dtype=bool)
             labels = []
             attention_pe = None
@@ -70,13 +72,24 @@ class GraphDataset(object):
                 padded_p = torch.zeros((len(batch), max_len, self.node_pe_dimension), dtype=float)
             if self.use_attention_pe:
                 attention_pe = torch.zeros((len(batch), max_len, max_len))
-
             for i, g in enumerate(batch):
                 labels.append(g.y.view(-1))
                 num_nodes = len(g.x)
+                # edge_index = utils.add_self_loops(batch[i].edge_index, None, num_nodes =  max_len)[0]
                 g = dense_transform(g)
-                padded_x[i] = g.x.squeeze()
-                padded_adj[i] = g.adj.squeeze()
+                # print("==================")
+                # print("g.x.squeeze().shape")
+                # print(g.x.squeeze().shape)
+                # print("g.adj.shape")
+                # print(g.adj.shape)
+                # print("padded_x[i]")
+                # print(padded_x[i].shape)
+                # print("padded_adj[i]")
+                # print(padded_adj[i].shape)
+                padded_x[i] = g.x#.squeeze()
+                 
+                # adj = utils.to_dense_adj(edge_index).squeeze()
+                padded_adj[i] = g.adj#.squeeze()
                 mask[i] = g.mask
                 if self.use_node_pe:
                     padded_p[i, :num_nodes] = g.node_pe
@@ -107,13 +120,16 @@ class RandomWalkNodePE(object):
     def get_embedding_dimension(self):
         return self.p_steps
 
-    def __call__(self, graph):
+    def __call__(self, i, graph):
         num_nodes = len(graph.x)
-        A = utils.to_dense_adj(graph.edge_index).squeeze()
+        edge_index = utils.add_self_loops(graph.edge_index, None, num_nodes =  num_nodes)[0] 
+        A = utils.to_dense_adj(edge_index).squeeze()
         D = A.sum(dim=-1)
+        A.fill_diagonal_(0)
         RW = A / D
         RW_power = RW
         node_pe = torch.zeros((num_nodes, self.p_steps))
+
         node_pe[:, 0] = RW.diagonal()
         for power in range(self.p_steps-1):
             RW_power = RW @ RW_power

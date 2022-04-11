@@ -13,6 +13,44 @@ from scipy import sparse as sp
 from transformer_layer import GraphiT_GT_Layer, MLPReadout
 
 
+class AtomEncoder(torch.nn.Module):
+
+    def __init__(self, emb_dim, full_atom_feature_dims):
+        super(AtomEncoder, self).__init__()
+        
+        self.atom_embedding_list = torch.nn.ModuleList()
+
+        for i, dim in enumerate(full_atom_feature_dims):
+            emb = torch.nn.Embedding(dim, emb_dim)
+            torch.nn.init.xavier_uniform_(emb.weight.data)
+            self.atom_embedding_list.append(emb)
+
+    def forward(self, x):
+        x_embedding = 0
+        for i in range(x.shape[-1]):
+            x_embedding += self.atom_embedding_list[i](x[...,i])
+
+        return x_embedding
+
+class BondEncoder(torch.nn.Module):
+    
+    def __init__(self, emb_dim, full_bond_feature_dims):
+        super(BondEncoder, self).__init__()
+        
+        self.bond_embedding_list = torch.nn.ModuleList()
+
+        for i, dim in enumerate(full_bond_feature_dims):
+            emb = torch.nn.Embedding(dim, emb_dim)
+            torch.nn.init.xavier_uniform_(emb.weight.data)
+            self.bond_embedding_list.append(emb)
+
+    def forward(self, edge_attr):
+        bond_embedding = 0
+        for i in range(edge_attr.shape[-1]):
+            bond_embedding += self.bond_embedding_list[i](edge_attr[...,i])
+
+        return bond_embedding
+
 def global_pooling(x, readout='mean'):
     if readout == 'mean':
         return x.mean(dim=1)
@@ -44,6 +82,7 @@ class GraphiTNet(nn.Module):
 
         self.readout = net_params['readout']
 
+        self.n_classes = net_params['n_classes']
         self.in_feat_dropout = nn.Dropout(in_feat_dropout)
         
         self.use_edge_features = net_params['use_edge_features']
@@ -68,9 +107,17 @@ class GraphiTNet(nn.Module):
         if self.use_node_pe:
             self.embedding_p = nn.Linear(self.pos_enc_dim, GT_hidden_dim)
         
-        self.embedding_h = nn.Embedding(num_atom_type, GT_hidden_dim)
+
+        if isinstance(num_atom_type, list):
+            self.embedding_h = AtomEncoder(GT_hidden_dim, num_atom_type)
+        else:
+            self.embedding_h = nn.Embedding(num_atom_type, GT_hidden_dim)
+        
         if self.use_edge_features:
-            self.embedding_e = nn.Embedding(num_bond_type + 1, GT_hidden_dim)
+            if isinstance(num_bond_type, list):
+                self.embedding_e = BondEncoder(GT_hidden_dim, num_bond_type)
+            else:
+                self.embedding_e = nn.Embedding(num_bond_type + 1, GT_hidden_dim)
         
         self.layers = nn.ModuleList([
             GraphiT_GT_Layer(GT_hidden_dim, GT_hidden_dim, GT_n_heads, **layer_params) for _ in range(GT_layers-1)
@@ -84,7 +131,7 @@ class GraphiTNet(nn.Module):
             self.p_out = nn.Linear(GT_out_dim, self.pos_enc_dim)
             self.Whp = nn.Linear(GT_out_dim+self.pos_enc_dim, GT_out_dim)
 
-        self.MLP_layer = MLPReadout(GT_out_dim, 1)   # 1 out dim since regression problem        
+        self.MLP_layer = MLPReadout(GT_out_dim, self.n_classes)   # 1 out dim when regression problem        
                 
         
     def forward(self, h, p, e, k_RW=None, mask=None):
@@ -105,10 +152,10 @@ class GraphiTNet(nn.Module):
         k_RW_0 = k_RW
         for conv in self.layers:
             h, p, e = conv(h, p, e, k_RW=k_RW, mask=mask, adj=adj)
+            # h, p, e = conv(h, p, e, k_RW=None, mask=None, adj=None)
             # This part should probably be moved to the DataLoader:
             # if self.use_attention_pe:
             #     k_RW = torch.matmul(k_RW, k_RW_0)
-        
         if self.use_node_pe:
             p = self.p_out(p)
             # Concat h and p before classification
@@ -116,11 +163,33 @@ class GraphiTNet(nn.Module):
 
         # readout
         h = global_pooling(h, readout=self.readout)
-        
         return self.MLP_layer(h)
-        
+    
+
     def loss(self, scores, targets):
 
-        loss = nn.L1Loss()(scores, targets)
+        loss = 0 
+
+        if self.n_classes == 1:
+            loss = nn.L1Loss()(scores, targets)
+        else:
+            loss = torch.nn.BCEWithLogitsLoss()(scores, targets)
         
         return loss
+        
+    # def loss_l1(self, scores, targets):
+
+    #     loss = nn.L1Loss()(scores, targets)
+        
+    #     return loss
+    
+    # def loss_bce(self, pred, labels):
+        
+    #     # Loss A: Task loss -------------------------------------------------------------
+    #     loss_a = torch.nn.BCEWithLogitsLoss()(pred, labels)
+        
+    #     if self.use_lapeig_loss:
+    #         raise NotImplementedError
+    #     else:
+    #         loss = loss_a
+    #     return loss

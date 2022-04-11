@@ -20,6 +20,10 @@ from torch.utils.data import DataLoader
 
 from tqdm import tqdm
 
+from ogb.graphproppred import PygGraphPropPredDataset, Evaluator
+from ogb.utils.features import get_atom_feature_dims, get_bond_feature_dims
+
+
 
 """
     IMPORTING CUSTOM MODULES/METHODS
@@ -48,7 +52,6 @@ def gpu_setup(use_gpu, gpu_id):
 # coding: utf-8
 
 from torch_geometric.data import Data
-from torch_geometric.datasets import ZINC
 from torch.utils.tensorboard import SummaryWriter
 
 save_run_tensorboard = True
@@ -76,7 +79,7 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     t0 = time.time()
     per_epoch_time = []
         
-    DATASET_NAME = 'ZINC'
+    DATASET_NAME = 'molhiv'
 
     trainset = GraphDataset(dataset['train'])
     valset = GraphDataset(dataset['val'])
@@ -133,9 +136,11 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     net_params['total_param'] = view_model_param(model, MODEL_NAME)
     # Write the network and optimization hyper-parameters in folder config/
     with open(write_config_file + '.txt', 'w') as f:
-        f.write("""Dataset: {},\nModel: {}\n\nparams={}\n\nnet_params={}\n\n\nTotal Parameters: {}\n\n"""                .format(DATASET_NAME, MODEL_NAME, params, net_params, net_params['total_param']))
+        f.write("""Dataset: {},\nModel: {}\n\nparams={}\n\nnet_params={}\n\n\nTotal Parameters: {}\n\n""".format(DATASET_NAME, MODEL_NAME, params, net_params, net_params['total_param']))
 
     model = model.to(device)
+    
+    evaluator = Evaluator("ogbg-molhiv")
 
     optimizer = optim.Adam(model.parameters(), lr=params['init_lr'], weight_decay=params['weight_decay'])
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min',
@@ -144,48 +149,48 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
                                                      verbose=True)
     
     epoch_train_losses, epoch_val_losses = [], []
-    epoch_train_MAEs, epoch_val_MAEs = [], [] 
+    epoch_train_accs, epoch_val_accs, epoch_test_accs = [], [], [] 
     
     # import train functions for all GNNs
-    from train_epoch_zinc import train_epoch_sparse as train_epoch, evaluate_network_sparse as evaluate_network
+    from train_epoch_molhiv import train_epoch_sparse as train_epoch, evaluate_network_sparse as evaluate_network
     
     train_loader = DataLoader(trainset, num_workers=4, batch_size=params['batch_size'], shuffle=True, collate_fn=trainset.collate_fn())
     val_loader = DataLoader(valset, num_workers=4, batch_size=params['batch_size'], shuffle=False, collate_fn=valset.collate_fn())
     test_loader = DataLoader(testset, num_workers=4, batch_size=params['batch_size'], shuffle=False, collate_fn=testset.collate_fn())
+
     
     # At any point you can hit Ctrl + C to break out of training early.
     try:
         with tqdm(range(params['epochs'])) as t:
             for epoch in t:
-
                 t.set_description('Epoch %d' % epoch)
 
                 start = time.time()
 
-                epoch_train_loss, epoch_train_mae, optimizer = train_epoch(model, optimizer, device, train_loader, epoch)
-                epoch_val_loss, epoch_val_mae, __ = evaluate_network(model, device, val_loader, epoch)
-                epoch_test_loss, epoch_test_mae, __ = evaluate_network(model, device, test_loader, epoch)
+                epoch_train_loss, epoch_train_acc, optimizer = train_epoch(model, optimizer, device, train_loader, epoch, evaluator)
+                epoch_val_loss, epoch_val_acc, __ = evaluate_network(model, device, val_loader, epoch, evaluator)
+                _, epoch_test_acc, __ = evaluate_network(model, device, test_loader, epoch, evaluator)
                 del __
                 
                 epoch_train_losses.append(epoch_train_loss)
                 epoch_val_losses.append(epoch_val_loss)
-                epoch_train_MAEs.append(epoch_train_mae)
-                epoch_val_MAEs.append(epoch_val_mae)
-                # print(epoch_train_mae)
+                epoch_train_accs.append(epoch_train_acc)
+                epoch_val_accs.append(epoch_val_acc)
+                epoch_test_accs.append(epoch_test_acc)
+
                 if save_run_tensorboard:
                     writer.add_scalar('train/_loss', epoch_train_loss, epoch)
                     writer.add_scalar('val/_loss', epoch_val_loss, epoch)
-                    writer.add_scalar('train/_mae', epoch_train_mae, epoch)
-                    writer.add_scalar('val/_mae', epoch_val_mae, epoch)
-                    writer.add_scalar('test/_mae', epoch_test_mae, epoch)
+                    writer.add_scalar('train/_avg_prec', epoch_train_acc, epoch)
+                    writer.add_scalar('val/_avg_prec', epoch_val_acc, epoch)
+                    writer.add_scalar('test/_avg_prec', epoch_test_acc, epoch)
                     writer.add_scalar('learning_rate', optimizer.param_groups[0]['lr'], epoch)
 
                         
                 t.set_postfix(time=time.time()-start, lr=optimizer.param_groups[0]['lr'],
-                              train_loss=epoch_train_loss, val_loss=epoch_val_loss,
-                              train_MAE=epoch_train_mae, val_MAE=epoch_val_mae,
-                              test_MAE=epoch_test_mae)
-
+                                  train_loss=epoch_train_loss, val_loss=epoch_val_loss,
+                                  train_AUC=epoch_train_acc, val_AUC=epoch_val_acc,
+                                  test_AUC=epoch_test_acc)
 
                 per_epoch_time.append(time.time()-start)
 
@@ -218,11 +223,20 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
         print('-' * 89)
         print('Exiting from training early because of KeyboardInterrupt')
     
-    test_loss_lapeig, test_mae, g_outs_test = evaluate_network(model, device, test_loader, epoch)
-    train_loss_lapeig, train_mae, g_outs_train = evaluate_network(model, device, train_loader, epoch)
+    ___, __, g_outs_test = evaluate_network(model, device, test_loader, epoch, evaluator)
+    del ___
+    del __
     
-    print("Test MAE: {:.4f}".format(test_mae))
-    print("Train MAE: {:.4f}".format(train_mae))
+    epoch_best = epoch_val_accs.index(max(epoch_val_accs))
+    
+    test_acc = epoch_test_accs[epoch_best]
+    train_acc = epoch_train_accs[epoch_best]
+    val_acc = epoch_val_accs[epoch_best]
+    
+    print("Test AUC: {:.4f}".format(test_acc))
+    print("Train AUC: {:.4f}".format(train_acc))
+    print("Val AUC: {:.4f}".format(val_acc))
+
     print("Convergence Time (Epochs): {:.4f}".format(epoch))
     print("TOTAL TIME TAKEN: {:.4f}s".format(time.time()-t0))
     print("AVG TIME PER EPOCH: {:.4f}s".format(np.mean(per_epoch_time)))
@@ -234,11 +248,11 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
         Write the results in out_dir/results folder
     """
     with open(write_file_name + '.txt', 'w') as f:
-        f.write("""Dataset: {},\nModel: {}\n\nparams={}\n\nnet_params={}\n\n{}\n\nTotal Parameters: {}\n\n
-    FINAL RESULTS\nTEST MAE: {:.4f}\nTRAIN MAE: {:.4f}\n\n
-    Convergence Time (Epochs): {:.4f}\nTotal Time Taken: {:.4f} hrs\nAverage Time Per Epoch: {:.4f} s\n\n\n"""\
-          .format(DATASET_NAME, MODEL_NAME, params, net_params, model, net_params['total_param'],
-                  test_mae, train_mae, epoch, (time.time()-t0)/3600, np.mean(per_epoch_time)))
+            f.write("""Dataset: {},\nModel: {}\n\nparams={}\n\nnet_params={}\n\n{}\n\nTotal Parameters: {}\n\n
+        FINAL RESULTS\nTEST AUC: {:.4f}\nTRAIN AUC: {:.4f}\nVAL AUC: {:.4f}\n\n
+        Convergence Time (Epochs): {:.4f}\nTotal Time Taken: {:.4f} hrs\nAverage Time Per Epoch: {:.4f} s\n\n\n"""\
+              .format(DATASET_NAME, MODEL_NAME, params, net_params, model, net_params['total_param'],
+                      test_acc, train_acc, val_acc, epoch, (time.time()-t0)/3600, np.mean(per_epoch_time)))
         
 
 
@@ -246,7 +260,6 @@ def main():
     """
         USER CONTROLS
     """
-    
     
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', help="Please give a config.json file with training/model/data/param details")
@@ -300,13 +313,17 @@ def main():
     else:
         DATASET_NAME = config['dataset']
     # dataset = LoadData(DATASET_NAME)
-    zinc_dataset_train = ZINC(root='/scratch/curan/rmenegau/torch_datasets/ZINC', subset=True, split='train')#, transform=compute_pe)
-    zinc_dataset_val = ZINC(root='/scratch/curan/rmenegau/torch_datasets/ZINC', subset=True, split='val')#, transform=compute_pe)
-    zinc_dataset_test = ZINC(root='/scratch/curan/rmenegau/torch_datasets/ZINC', subset=True, split='test')#, transform=compute_pe)
+    dataset = PygGraphPropPredDataset(name='ogbg-molhiv', root='/scratch/prospero/mselosse/GraphiT-edges/dataset/molhiv') # /scratch/prospero/mselosse/datasets
+    
+    
+    split_idx = dataset.get_idx_split()
+    molhiv_dataset_train = dataset[split_idx['train']]
+    molhiv_dataset_val = dataset[split_idx['valid']]
+    molhiv_dataset_test = dataset[split_idx['test']]
     dataset = {
-        'train': zinc_dataset_train,
-        'val': zinc_dataset_val,
-        'test': zinc_dataset_test
+        'train': molhiv_dataset_train,
+        'val': molhiv_dataset_val,
+        'test': molhiv_dataset_test
         }
     if args.out_dir is not None:
         out_dir = args.out_dir
@@ -376,13 +393,14 @@ def main():
     if args.attention_pe is not None:
         net_params['attention_pe'] = args.node_pe
 
-    # ZINC
+    # molhiv
     # FIXME
     # net_params['num_atom_type'] = dataset.num_atom_type
     # net_params['num_bond_type'] = dataset.num_bond_type
-    net_params['num_atom_type'] = len(np.unique(zinc_dataset_train.data.x))
-    net_params['num_bond_type'] = len(np.unique(zinc_dataset_train.data.edge_attr))
-    net_params['n_classes'] = 1
+    net_params['num_atom_type'] = get_atom_feature_dims()
+    net_params['num_bond_type'] = get_bond_feature_dims()
+    net_params['n_classes'] = 1 # there are actually to classes but from what I understand, this should be called "num_tasks"
+
     
     root_log_dir = out_dir + 'logs/' + MODEL_NAME + "_" + DATASET_NAME + "_GPU" + str(config['gpu']['id']) + "_" + time.strftime('%Hh%Mm%Ss_on_%b_%d_%Y')
     root_ckpt_dir = out_dir + 'checkpoints/' + MODEL_NAME + "_" + DATASET_NAME + "_GPU" + str(config['gpu']['id']) + "_" + time.strftime('%Hh%Mm%Ss_on_%b_%d_%Y')
@@ -399,5 +417,7 @@ def main():
 
     # net_params['total_param'] = view_model_param(MODEL_NAME, net_params)
     train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs)
-   
+
+
+
 main()

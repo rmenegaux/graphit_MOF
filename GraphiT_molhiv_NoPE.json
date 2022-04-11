@@ -11,11 +11,11 @@
     
     "params": {
         "seed": 41,
-        "epochs": 1000,
-        "batch_size": 32,
-        "init_lr": 0.0007,
+        "epochs": 200,
+        "batch_size": 128,
+        "init_lr": 0.0001,
         "lr_reduce_factor": 0.5,
-        "lr_schedule_patience": 25,
+        "lr_schedule_patience": 15,
         "min_lr": 1e-5,
         "weight_decay": 0.0,
         "print_epoch_interval": 5,
