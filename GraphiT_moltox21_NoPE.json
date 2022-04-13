@@ -1,0 +1,59 @@
+{
+    "gpu": {
+        "use": true,
+        "id": 0
+    },
+    
+    "model": "GraphiT",
+    "dataset": "moltox21",
+    
+    "out_dir": "out/GraphiT_moltox21_PE_noKernel/",
+    
+    "params": {
+        "seed": 41,
+        "epochs": 300,
+        "batch_size": 64,
+        "init_lr": 0.001,
+        "lr_reduce_factor": 0.5,
+        "lr_schedule_patience": 25,
+        "min_lr": 1e-6,
+        "weight_decay": 0.0,
+        "print_epoch_interval": 5,
+        "max_time": 48
+    },
+    
+    "net_params": {
+        "double_attention": false,
+
+        "L": 3,
+        "hidden_dim": 128,
+        "out_dim": 128,
+        "n_heads": 8,
+
+        "residual": true,
+        "readout": "sum",
+        "in_feat_dropout": 0.0,
+        "dropout": 0.3,
+        "feedforward": true,
+        "layer_norm": false,
+        "batch_norm": true,
+        
+        "use_node_pe": true,
+        "update_pos_enc": false,
+        "concat_h_p": false,
+        "node_pe_params": {
+            "node_pe": "rand_walk",
+            "p_steps": 16
+        },
+
+        "use_attention_pe": false,
+        "attention_pe_params": {
+            "attention_pe": "diffusion",
+            "p_steps": 1,
+            "beta": 0.6
+        },
+        
+        "use_edge_features": true,
+        "update_edge_features": false
+    }
+}
