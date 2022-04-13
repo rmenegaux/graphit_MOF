@@ -53,7 +53,7 @@
             "beta": 0.25
         },
         
-        "use_edge_features": true,
+        "use_edge_features": false,
         "update_edge_features": false
     }
 }

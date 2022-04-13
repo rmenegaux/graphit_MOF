@@ -314,6 +314,7 @@ def main():
         DATASET_NAME = config['dataset']
     # dataset = LoadData(DATASET_NAME)
     dataset = PygGraphPropPredDataset(name='ogbg-molhiv', root='/scratch/prospero/mselosse/GraphiT-edges/dataset/molhiv') # /scratch/prospero/mselosse/datasets
+    # dataset = PygGraphPropPredDataset(name='ogbg-molhiv', root='/gpfswork/rech/tbr/uho58uo/GraphiT-edges/dataset/molhiv')
     
     
     split_idx = dataset.get_idx_split()
