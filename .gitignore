@@ -6,3 +6,4 @@ out/*
 *.pyx
 *.so
 scripts_margot/*
+wandb/*
