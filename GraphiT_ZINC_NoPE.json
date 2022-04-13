@@ -7,7 +7,7 @@
     "model": "GraphiT",
     "dataset": "ZINC",
     
-    "out_dir": "out/GraphiT_ZINC_PE_VirtualNode/",
+    "out_dir": "out/GraphiT_ZINC_PE_ProgressiveRW/",
     
     "params": {
         "seed": 41,
@@ -31,32 +31,33 @@
         "n_heads": 8,
 
         "residual": true,
-        "readout": "first",
+        "readout": "sum",
         "in_feat_dropout": 0.0,
         "dropout": 0.0,
         "feedforward": true,
         "layer_norm": false,
         "batch_norm": true,
         
-        "use_node_pe": true,
+        "use_node_pe": "sum",
         "update_pos_enc": false,
-        "concat_h_p": false,
         "node_pe_params": {
             "node_pe": "rand_walk",
             "p_steps": 16
         },
 
         "use_attention_pe": true,
+        "learnable_attention_pe": false,
         "attention_pe_params": {
-            "attention_pe": "rand_walk",
+            "attention_pe": "progressive_RW",
             "zero_diag": "false",
             "p_steps": 16,
             "beta": 0.25
         },
+        "normalize_degree": true,
         
         "use_edge_features": true,
         "update_edge_features": false,
 
-        "virtual_node": true
+        "virtual_node": false
     }
 }

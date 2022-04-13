@@ -25,7 +25,8 @@ from tqdm import tqdm
     IMPORTING CUSTOM MODULES/METHODS
 """
 from transformer_net import GraphiTNet
-from data import GraphDataset, compute_pe, NodePositionalEmbeddings, AttentionPositionalEmbeddings
+from data import GraphDataset
+from positional_encoding import NodePositionalEmbeddings, AttentionPositionalEmbeddings
 
 
 """
@@ -84,14 +85,13 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
 
     # Add virtual node connected to everyone
     if net_params['virtual_node'] == True:
+        net_params['num_atom_type'] += 1
+        net_params['num_bond_type'] += 1
         for dset in [trainset, valset, testset]:
-            dset.add_virtual_nodes()
+            dset.add_virtual_nodes(x_fill=net_params['num_atom_type'], edge_attr_fill=net_params['num_bond_type'])
 
     # Initialize node positional embeddings
-    node_pe_params = net_params['node_pe_params']
-    attention_pe_params = net_params['attention_pe_params']
-
-    if net_params['use_node_pe']:
+    if net_params['use_node_pe'] in ['concat', 'sum', 'product']:
         node_pe_params = net_params['node_pe_params']
         if (node_pe_params['node_pe'] not in NodePositionalEmbeddings.keys()):
             print('{} is not a recognized node positional embedding, defaulting to none')
@@ -101,6 +101,8 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
             net_params['pos_enc_dim'] = NodePE.get_embedding_dimension()
             for dset in [trainset, valset, testset]:
                 dset.compute_node_pe(NodePE)
+    else:
+        net_params['use_node_pe'] = False
     # Pre-compute attention relative positional embeddings
     if net_params['use_attention_pe']:
         attention_pe_params = net_params['attention_pe_params']
@@ -111,6 +113,9 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
             AttentionPE = AttentionPositionalEmbeddings[attention_pe_params['attention_pe']](**attention_pe_params)
             for dset in [trainset, valset, testset]:
                 dset.compute_attention_pe(AttentionPE)
+            net_params['learnable_attention_pe'] = (attention_pe_params['attention_pe'] in ['plural_RW', 'edge_RW'])
+            net_params['attention_pe_dim'] = AttentionPE.get_dimension()
+            net_params['progressive_attention'] = attention_pe_params['attention_pe'] in ['progressive_RW']
         
     root_log_dir, root_ckpt_dir, write_file_name, write_config_file, viz_dir = dirs
     device = net_params['device']
@@ -285,7 +290,6 @@ def main():
     parser.add_argument('--node_pe', help="Please give a value for node_pe")
     parser.add_argument('--attention_pe', help="Please give a value for attention_pe")
     parser.add_argument('--update_pos_enc', help="Please give a value for update_pos_enc")
-    parser.add_argument('--concat_h_p', help="Please give a value for concat_h_p")
     args = parser.parse_args()
     with open(args.config) as f:
         config = json.load(f)
@@ -360,8 +364,6 @@ def main():
         net_params['update_edge_features'] = True if args.update_edge_features=='True' else False
     if args.update_pos_enc is not None:
         net_params['update_pos_enc'] = True if args.update_pos_enc=='True' else False
-    if args.concat_h_p is not None:
-        net_params['concat_h_p'] = True if args.concat_h_p=='True' else False
     if args.readout is not None:
         net_params['readout'] = args.readout
     if args.in_feat_dropout is not None:
@@ -379,14 +381,14 @@ def main():
     if args.node_pe is not None:
         net_params['node_pe'] = args.node_pe
     if args.attention_pe is not None:
-        net_params['attention_pe'] = args.node_pe
+        net_params['attention_pe'] = args.attention_pe
 
     # ZINC
     # FIXME: move this to data.py
     # net_params['num_atom_type'] = dataset.num_atom_type
     # net_params['num_bond_type'] = dataset.num_bond_type
-    net_params['num_atom_type'] = len(np.unique(zinc_dataset_train.data.x)) + (net_params['virtual_node'] == True)
-    net_params['num_bond_type'] = len(np.unique(zinc_dataset_train.data.edge_attr)) + (net_params['virtual_node'] == True)
+    net_params['num_atom_type'] = len(np.unique(zinc_dataset_train.data.x))
+    net_params['num_bond_type'] = len(np.unique(zinc_dataset_train.data.edge_attr))
 
     experiment_name = MODEL_NAME + "_" + DATASET_NAME + "_GPU" + str(config['gpu']['id']) + "_" + time.strftime('%Hh%Mm%Ss_on_%b_%d_%Y')
     
