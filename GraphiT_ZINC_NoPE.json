@@ -7,7 +7,7 @@
     "model": "GraphiT",
     "dataset": "ZINC",
     
-    "out_dir": "out/GraphiT_ZINC_PE_ProgressiveRW/",
+    "out_dir": "out/GraphiT_ZINC_Tests/",
     
     "params": {
         "seed": 41,
@@ -46,9 +46,8 @@
         },
 
         "use_attention_pe": true,
-        "learnable_attention_pe": false,
         "attention_pe_params": {
-            "attention_pe": "progressive_RW",
+            "attention_pe": "rand_walk",
             "zero_diag": "false",
             "p_steps": 16,
             "beta": 0.25

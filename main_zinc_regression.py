@@ -115,7 +115,7 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
                 dset.compute_attention_pe(AttentionPE)
             net_params['learnable_attention_pe'] = (attention_pe_params['attention_pe'] in ['plural_RW', 'edge_RW'])
             net_params['attention_pe_dim'] = AttentionPE.get_dimension()
-            net_params['progressive_attention'] = attention_pe_params['attention_pe'] in ['progressive_RW']
+            net_params['progressive_attention'] = attention_pe_params['attention_pe'] in ['progressive_RW', 'progressive_diffusion']
         
     root_log_dir, root_ckpt_dir, write_file_name, write_config_file, viz_dir = dirs
     device = net_params['device']
