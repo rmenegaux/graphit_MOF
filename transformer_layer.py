@@ -8,6 +8,14 @@ import numpy as np
     GraphiT-GT
     
 """
+def combine_h_p(h, p, operation='sum'):
+    if operation == 'concat':
+        h = torch.cat((h, p), dim=-1)
+    elif operation == 'sum':
+        h = h + p
+    elif operation == 'product':
+        h = h * p
+    return h
 
 """
     Single Attention Head
@@ -134,14 +142,16 @@ class GraphiT_GT_Layer(nn.Module):
         self.feedforward = layer_params['feedforward']
         self.update_edge_features = layer_params['update_edge_features']
         self.use_node_pe = layer_params['use_node_pe']
+        self.use_attention_pe = layer_params['use_attention_pe']
+        self.learnable_attention_pe = layer_params['learnable_attention_pe']
+        self.normalize_degree = layer_params['normalize_degree']
         self.update_pos_enc = layer_params['update_pos_enc']
-        self.concat_h_p = layer_params['concat_h_p']
 
         attention_params = {
             param: layer_params[param] for param in ['double_attention', 'use_bias', 'use_attention_pe', 'use_edge_features']
         }
         # in_dim*2 if positional embeddings are concatenated rather than summed
-        in_dim_h = in_dim*2 if (self.use_node_pe and self.concat_h_p) else in_dim
+        in_dim_h = in_dim*2 if (self.use_node_pe == 'concat') else in_dim
         self.attention_h = MultiHeadAttentionLayer(in_dim_h, in_dim, out_dim//num_heads, num_heads, **attention_params)
         self.O_h = nn.Linear(out_dim, out_dim)
         
@@ -149,6 +159,11 @@ class GraphiT_GT_Layer(nn.Module):
             self.attention_p = MultiHeadAttentionLayer(in_dim, in_dim, out_dim//num_heads, num_heads, **attention_params)
             self.O_p = nn.Linear(out_dim, out_dim)
         
+        self.learnable_attention_pe = layer_params['learnable_attention_pe']
+        if self.use_attention_pe and self.learnable_attention_pe:
+            attention_pe_dim = layer_params['attention_pe_dim']
+            self.coef = nn.Parameter(torch.ones(attention_pe_dim) / attention_pe_dim)
+
         if self.layer_norm:
             self.layer_norm1_h = nn.LayerNorm(out_dim)
             
@@ -170,6 +185,8 @@ class GraphiT_GT_Layer(nn.Module):
             self.B1 = nn.Linear(out_dim, out_dim)
             self.B2 = nn.Linear(out_dim, out_dim)
             self.E12 = nn.Linear(out_dim, out_dim)
+            if self.layer_norm:
+                self.layer_norm_e = nn.LayerNorm(out_dim)
             # self.batch_norm_e = nn.BatchNorm1d(out_dim)
 
     def forward_edges(self, h, e):
@@ -184,6 +201,10 @@ class GraphiT_GT_Layer(nn.Module):
         e = B1_h + B2_h + E12
         # e = self.batch_norm_e(e)
         e = e_in + F.relu(e)
+        # e = e_in + torch.tanh(e)
+        if self.layer_norm:
+            e = self.layer_norm_e(e)
+        # Batch norm not yet implemented, it would require a reshape
         return e
 
     def forward_p(self, p, e, k_RW=None, mask=None, adj=None):
@@ -207,6 +228,8 @@ class GraphiT_GT_Layer(nn.Module):
         '''
         # # FFN for h
         h_in2 = h # for second residual connection
+        if self.layer_norm:
+            h = self.layer_norm2_h(h)
         h = self.FFN_h_layer1(h)
         h = F.relu(h)
         h = F.dropout(h, self.dropout, training=self.training)
@@ -215,8 +238,8 @@ class GraphiT_GT_Layer(nn.Module):
         if self.residual:
             h = h_in2 + h # residual connection       
     
-        if self.layer_norm:
-            h = self.layer_norm2_h(h)
+        # if self.layer_norm:
+        #     h = self.layer_norm2_h(h)
 
         if self.batch_norm:
             h = self.batch_norm2_h(h.transpose(1,2)).transpose(1,2)
@@ -227,11 +250,19 @@ class GraphiT_GT_Layer(nn.Module):
         h_in1 = h # for first residual connection
         
         # [START] For calculation of h -----------------------------------------------------------------
-        
-        if self.use_node_pe and self.concat_h_p:
-            h = torch.cat((h, p), dim=-1)
-        elif self.use_node_pe:
-            h = h + p
+        h = combine_h_p(h, p, operation=self.use_node_pe)
+
+        if self.layer_norm:
+            h = self.layer_norm1_h(h)
+
+        # Compute the weighted average of the relative positional encoding
+        if self.use_attention_pe and self.learnable_attention_pe:
+            with torch.no_grad():
+                coef = self.coef.data.clamp(min=0)
+                coef /= coef.sum(dim=0, keepdim=True)
+                self.coef.data.copy_(coef)
+            k_RW = torch.tensordot(self.coef, k_RW, dims=[[0], [-1]])
+
         # multi-head attention out
         h = self.attention_h(h, e, k_RW=k_RW, mask=mask, adj=adj)
         
@@ -242,11 +273,18 @@ class GraphiT_GT_Layer(nn.Module):
 
         h = self.O_h(h)
 
+        # Normalize by degree
+        # The degree computation could be moved to the DataLoader
+        if self.normalize_degree:
+            degrees = adj.sum(dim=-1, keepdim=True)
+            degrees[degrees == 0] = 1
+            h = h * degrees.pow(-0.5)
+
         if self.residual:
             h = h_in1 + h # residual connection
             
-        if self.layer_norm:
-            h = self.layer_norm1_h(h)
+        # if self.layer_norm:
+        #     h = self.layer_norm1_h(h)
 
         if self.batch_norm:
             # Apparently have to do this double transpose for 3D input 
