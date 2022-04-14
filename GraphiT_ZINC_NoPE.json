@@ -7,7 +7,7 @@
     "model": "GraphiT",
     "dataset": "ZINC",
     
-    "out_dir": "out/GraphiT_ZINC_PE_noKernel/",
+    "out_dir": "out/GraphiT_ZINC_Tests/",
     
     "params": {
         "seed": 41,
@@ -19,7 +19,7 @@
         "min_lr": 1e-5,
         "weight_decay": 0.0,
         "print_epoch_interval": 5,
-        "max_time": 48
+        "max_time": 24
     },
     
     "net_params": {
@@ -38,22 +38,25 @@
         "layer_norm": false,
         "batch_norm": true,
         
-        "use_node_pe": true,
+        "use_node_pe": "sum",
         "update_pos_enc": false,
-        "concat_h_p": false,
         "node_pe_params": {
             "node_pe": "rand_walk",
             "p_steps": 16
         },
 
-        "use_attention_pe": false,
+        "use_attention_pe": true,
         "attention_pe_params": {
             "attention_pe": "rand_walk",
+            "zero_diag": "false",
             "p_steps": 16,
             "beta": 0.25
         },
+        "normalize_degree": true,
         
         "use_edge_features": true,
-        "update_edge_features": false
+        "update_edge_features": false,
+
+        "virtual_node": false
     }
 }
