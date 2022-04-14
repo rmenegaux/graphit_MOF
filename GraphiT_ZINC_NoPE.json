@@ -52,6 +52,7 @@
             "p_steps": 16,
             "beta": 0.25
         },
+        "last_layer_full_attention": true,
         "normalize_degree": true,
         
         "use_edge_features": true,
