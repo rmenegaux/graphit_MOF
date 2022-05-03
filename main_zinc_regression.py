@@ -27,6 +27,7 @@ from tqdm import tqdm
 from transformer_net import GraphiTNet
 from data import GraphDataset
 from positional_encoding import NodePositionalEmbeddings, AttentionPositionalEmbeddings
+from compute_gckn_pe import OneHotEdges, GCKNEncoding
 
 
 """
@@ -53,6 +54,7 @@ from torch_geometric.datasets import ZINC
 from torch.utils.tensorboard import SummaryWriter
 
 save_run_tensorboard = True
+ZINC_PATH = '/scratch/curan/rmenegau/torch_datasets/ZINC'
 
 """
     VIEWING MODEL CONFIG AND PARAMS
@@ -68,6 +70,37 @@ def view_model_param(model, MODEL_NAME):
     print('MODEL/Total parameters:', MODEL_NAME, total_param)
     return total_param
 
+"""
+    GCKN CODE
+"""
+
+def precompute_gckn_embeddings_ZINC(node_pe_params, cache_dir):
+    n_tags = 28
+    if node_pe_params['encode_edges']:
+        num_edge_features = 3
+        train_dset, val_dset, test_dset = (
+            ZINC(ZINC_PATH, subset=True, split=split, transform=OneHotEdges(num_edge_features)) for split in ['train', 'val', 'test']
+            )
+    else:
+        num_edge_features = 0
+        train_dset, val_dset, test_dset = (
+            ZINC(ZINC_PATH, subset=True, split=split) for split in ['train', 'val', 'test']
+            )
+    gckn_pos_enc_path = '{}/zinc_gckn_{}_{}_{}_{}_{}_{}_{}.pkl'.format(
+        cache_dir,
+        node_pe_params['dim'], node_pe_params['path'], node_pe_params['sigma'],
+        node_pe_params['pooling'], node_pe_params['aggregation'],
+        node_pe_params['normalize'], node_pe_params['encode_edges'])
+    gckn_pos_encoder = GCKNEncoding(
+        gckn_pos_enc_path, node_pe_params['dim'], node_pe_params['path'],
+        sigma=node_pe_params['sigma'], pooling=node_pe_params['pooling'], aggregation=node_pe_params['aggregation'],
+        normalize=node_pe_params['normalize'], encode_edges=node_pe_params['encode_edges'], dim_edges=num_edge_features)
+    print('GCKN Position encoding')
+    gckn_pos_enc_values = gckn_pos_encoder.apply_to(
+        train_dset, val_dset + test_dset, batch_size=64, n_tags=n_tags)
+    NodePE = NodePositionalEmbeddings['gckn'](gckn_pos_enc_values, embedding_dimension=gckn_pos_encoder.pos_enc_dim)
+    del gckn_pos_encoder
+    return NodePE
 
 """
     TRAINING CODE
@@ -83,6 +116,8 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     valset = GraphDataset(dataset['val'])
     testset = GraphDataset(dataset['test'])
 
+    root_log_dir, root_ckpt_dir, write_file_name, write_config_file, cache_dir = dirs
+
     # Add virtual node connected to everyone
     if net_params['virtual_node'] == True:
         net_params['num_atom_type'] += 1
@@ -97,7 +132,10 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
             print('{} is not a recognized node positional embedding, defaulting to none')
             net_params['use_node_pe'] = False
         else:
-            NodePE = NodePositionalEmbeddings[node_pe_params['node_pe']](**node_pe_params)
+            if node_pe_params['node_pe'] == 'gckn':
+                NodePE = precompute_gckn_embeddings_ZINC(node_pe_params, cache_dir)
+            else:
+                NodePE = NodePositionalEmbeddings[node_pe_params['node_pe']](**node_pe_params)
             net_params['pos_enc_dim'] = NodePE.get_embedding_dimension()
             for dset in [trainset, valset, testset]:
                 dset.compute_node_pe(NodePE)
@@ -117,7 +155,6 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
             net_params['attention_pe_dim'] = AttentionPE.get_dimension()
             net_params['progressive_attention'] = attention_pe_params['attention_pe'] in ['progressive_RW', 'progressive_diffusion']
         
-    root_log_dir, root_ckpt_dir, write_file_name, write_config_file, viz_dir = dirs
     device = net_params['device']
        
     log_dir = os.path.join(root_log_dir, "RUN_" + str(0))
@@ -309,14 +346,9 @@ def main():
     else:
         DATASET_NAME = config['dataset']
     # dataset = LoadData(DATASET_NAME)
-    zinc_dataset_train = ZINC(root='/scratch/curan/rmenegau/torch_datasets/ZINC', subset=True, split='train')#, transform=compute_pe)
-    zinc_dataset_val = ZINC(root='/scratch/curan/rmenegau/torch_datasets/ZINC', subset=True, split='val')#, transform=compute_pe)
-    zinc_dataset_test = ZINC(root='/scratch/curan/rmenegau/torch_datasets/ZINC', subset=True, split='test')#, transform=compute_pe)
     dataset = {
-        'train': zinc_dataset_train,
-        'val': zinc_dataset_val,
-        'test': zinc_dataset_test
-        }
+        split: ZINC(root=ZINC_PATH, subset=True, split=split) for split in ['train', 'val', 'test']
+    }
     if args.out_dir is not None:
         out_dir = args.out_dir
     else:
@@ -387,8 +419,8 @@ def main():
     # FIXME: move this to data.py
     # net_params['num_atom_type'] = dataset.num_atom_type
     # net_params['num_bond_type'] = dataset.num_bond_type
-    net_params['num_atom_type'] = len(np.unique(zinc_dataset_train.data.x))
-    net_params['num_bond_type'] = len(np.unique(zinc_dataset_train.data.edge_attr))
+    net_params['num_atom_type'] = len(np.unique(dataset['train'].data.x))
+    net_params['num_bond_type'] = len(np.unique(dataset['train'].data.edge_attr))
     net_params['n_classes'] = 1
 
     experiment_name = MODEL_NAME + "_" + DATASET_NAME + "_GPU" + str(config['gpu']['id']) + "_" + time.strftime('%Hh%Mm%Ss_on_%b_%d_%Y')
@@ -397,14 +429,17 @@ def main():
     root_ckpt_dir = out_dir + 'checkpoints/' + experiment_name
     write_file_name = out_dir + 'results/result_' + experiment_name
     write_config_file = out_dir + 'configs/config_' + experiment_name
-    viz_dir = out_dir + 'viz/' + experiment_name
-    dirs = root_log_dir, root_ckpt_dir, write_file_name, write_config_file, viz_dir
+    cache_dir = out_dir + 'cache/'
+    dirs = root_log_dir, root_ckpt_dir, write_file_name, write_config_file, cache_dir
 
     if not os.path.exists(out_dir + 'results'):
         os.makedirs(out_dir + 'results')
         
     if not os.path.exists(out_dir + 'configs'):
         os.makedirs(out_dir + 'configs')
+    
+    if not os.path.exists(out_dir + 'cache'):
+        os.makedirs(out_dir + 'cache')
 
     # net_params['total_param'] = view_model_param(MODEL_NAME, net_params)
     train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs)

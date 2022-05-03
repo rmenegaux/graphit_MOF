@@ -139,6 +139,7 @@ class GraphiT_GT_Layer(nn.Module):
         self.residual = layer_params['residual']
         self.layer_norm = layer_params['layer_norm']     
         self.batch_norm = layer_params['batch_norm']
+        self.instance_norm = layer_params['instance_norm']
         self.feedforward = layer_params['feedforward']
         self.update_edge_features = layer_params['update_edge_features']
         self.use_node_pe = layer_params['use_node_pe']
@@ -169,6 +170,9 @@ class GraphiT_GT_Layer(nn.Module):
             
         if self.batch_norm:
             self.batch_norm1_h = nn.BatchNorm1d(out_dim)
+
+        if self.instance_norm:
+            self.instance_norm1_h = nn.InstanceNorm1d(out_dim)
         
         # FFN for h
         if self.feedforward:
@@ -180,6 +184,9 @@ class GraphiT_GT_Layer(nn.Module):
             
         if self.batch_norm:
             self.batch_norm2_h = nn.BatchNorm1d(out_dim)
+
+        if self.instance_norm:
+            self.instance_norm2_h = nn.InstanceNorm1d(out_dim)
 
         if self.update_edge_features:
             self.B1 = nn.Linear(out_dim, out_dim)
@@ -243,6 +250,10 @@ class GraphiT_GT_Layer(nn.Module):
 
         if self.batch_norm:
             h = self.batch_norm2_h(h.transpose(1,2)).transpose(1,2)
+
+        if self.instance_norm:
+            # h = self.instance_norm2_h(h.transpose(1,2)).transpose(1,2)
+            h = self.instance_norm1_h(h)
         return h
 
     def forward(self, h, p, e, k_RW=None, mask=None, adj=None):
@@ -289,6 +300,10 @@ class GraphiT_GT_Layer(nn.Module):
         if self.batch_norm:
             # Apparently have to do this double transpose for 3D input 
             h = self.batch_norm1_h(h.transpose(1,2)).transpose(1,2)
+
+        if self.instance_norm:
+            # h = self.instance_norm1_h(h.transpose(1,2)).transpose(1,2)
+            h = self.instance_norm1_h(h)
 
         if self.feedforward:
             h = self.feed_forward_block(h)         

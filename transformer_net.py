@@ -99,6 +99,7 @@ class GraphiTNet(nn.Module):
             'dropout',
             'layer_norm',
             'batch_norm',
+            'instance_norm',
             'residual',
             'use_node_pe',
             'use_attention_pe',
@@ -130,7 +131,9 @@ class GraphiTNet(nn.Module):
         self.layers = nn.ModuleList([
             GraphiT_GT_Layer(GT_hidden_dim, GT_hidden_dim, GT_n_heads, **layer_params) for _ in range(GT_layers-1)
             ])
-        layer_params['use_attention_pe'] = False # Last layer with full vanilla attention
+        if net_params['last_layer_full_attention']:
+            # Last layer with full vanilla attention (no kernel)
+            layer_params['use_attention_pe'] = False 
         layer_params['update_edge_features'] = False
         self.layers.append(
             GraphiT_GT_Layer(GT_hidden_dim, GT_out_dim, GT_n_heads, **layer_params)
@@ -173,6 +176,7 @@ class GraphiTNet(nn.Module):
         if self.use_node_pe:
             p = self.p_out(p)
             # Concat h and p before classification
+            # FIXME: hp is not used for now
             hp = self.Whp(torch.cat((h, p), dim=-1))
 
         # readout

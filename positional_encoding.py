@@ -54,6 +54,23 @@ class RandomWalkNodePE(object):
             node_pe[:, power + 1] = RW_power.diagonal()
         return node_pe
 
+class IterableNodePE(object):
+    '''
+    A disguised list, containing precomputed positional encodings. Careful indexing is required
+    '''
+    def __init__(self, pe_list, **parameters):
+        self.current_index = 0
+        self.pe_list = pe_list
+        self.embedding_dimension = parameters.get('embedding_dimension', None)
+
+    def get_embedding_dimension(self):
+        return self.embedding_dimension
+
+    def __call__(self, graph):
+        node_pe = self.pe_list[self.current_index]
+        self.current_index += 1
+        return node_pe
+
 
 class BaseAttentionPE(object):
 
@@ -172,7 +189,8 @@ class AdjacencyAttentionPE(BaseAttentionPE):
 
 
 NodePositionalEmbeddings = {
-    'rand_walk': RandomWalkNodePE
+    'rand_walk': RandomWalkNodePE,
+    'gckn': IterableNodePE
 }
 
 AttentionPositionalEmbeddings = {

@@ -59,10 +59,10 @@
             "p_steps": 16,
             "beta": 0.25
         },
-        "last_layer_full_attention": true,
+        "last_layer_full_attention": false,
         "normalize_degree": true,
         
-        "use_edge_features": true,
+        "use_edge_features": false,
         "update_edge_features": false,
 
         "virtual_node": false
