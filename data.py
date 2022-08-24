@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data.dataloader import default_collate
 from torch_geometric.transforms import ToDense
+import torch.profiler as profiler
 
 from virtual_node import VirtualNode
 
@@ -47,6 +48,7 @@ class GraphDataset(object):
 
     def collate_fn(self):
         def collate(batch):
+            # with profiler.record_function("COLLATE FUNCTION"):
             batch = list(batch)
             max_len = max(len(g.x) for g in batch)
             dense_transform = ToDense(max_len)
@@ -79,7 +81,7 @@ class GraphDataset(object):
                 # print("padded_adj[i]")
                 # print(padded_adj[i].shape)
                 padded_x[i] = g.x#.squeeze()
-                 
+
                 # adj = utils.to_dense_adj(edge_index).squeeze()
                 padded_adj[i] = g.adj#.squeeze()
                 mask[i] = g.mask

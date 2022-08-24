@@ -154,9 +154,33 @@ class EdgeRWAttentionPE(BaseAttentionPE):
         return self.num_edge_type
 
 
-class PluralRWAttentionPE(BaseAttentionPE):
+class MultiRWAttentionPE(BaseAttentionPE):
     '''
     Computes the random walk kernel for all number of steps from 1 to self.p_steps
+    '''
+    def __init__(self, **parameters):
+        self.p_steps = parameters.get('p_steps', 16)
+        self.stride = parameters.get('stride', 1)
+        self.beta = parameters.get('beta', 0.25)
+        super().__init__(**parameters)
+    
+    def compute_attention_pe(self, graph):
+        A = utils.to_dense_adj(graph.edge_index).squeeze()
+        k_RW_0 = RW_kernel_from_adjacency(A, beta=self.beta, p_steps=1)
+        k_RW_power = k_RW_0
+        k_RW_all_powers = [k_RW_0]
+        for i in range(self.p_steps-1):
+            for _ in range(self.stride):
+                k_RW_power = k_RW_power @ k_RW_0
+            k_RW_all_powers.append(k_RW_power)
+        return torch.stack(k_RW_all_powers, dim=-1)
+
+    def get_dimension(self):
+        return self.p_steps
+
+class MultiDiffusionAttentionPE(BaseAttentionPE):
+    '''
+    Computes the diffusion kernel for all number of steps from 1 to self.p_steps
     '''
     def __init__(self, **parameters):
         self.p_steps = parameters.get('p_steps', 16)
@@ -165,11 +189,14 @@ class PluralRWAttentionPE(BaseAttentionPE):
     
     def compute_attention_pe(self, graph):
         A = utils.to_dense_adj(graph.edge_index).squeeze()
-        k_RW = RW_kernel_from_adjacency(A, beta=self.beta, p_steps=1)
-        k_RW_all_powers = [k_RW]
+        L = get_laplacian_from_adjacency(A)
+        k_diff_0 = torch.from_numpy(expm(-self.beta * L.numpy()))
+        k_diff_power = k_diff_0
+        k_diff_all_powers = [k_diff_0]
         for i in range(self.p_steps-1):
-            k_RW_all_powers.append(k_RW_all_powers[i] @ k_RW_all_powers[0])
-        return torch.stack(k_RW_all_powers, dim=-1)
+            k_diff_power = k_diff_power @ k_diff_0
+            k_diff_all_powers.append(k_diff_power)
+        return torch.stack(k_diff_all_powers, dim=-1)
 
     def get_dimension(self):
         return self.p_steps
@@ -195,10 +222,9 @@ NodePositionalEmbeddings = {
 
 AttentionPositionalEmbeddings = {
     'rand_walk': RandomWalkAttentionPE,
-    'progressive_RW': RandomWalkAttentionPE,
     'edge_RW': EdgeRWAttentionPE,
-    'plural_RW': PluralRWAttentionPE,
+    'multi_RW': MultiRWAttentionPE,
+    'multi_diffusion': MultiDiffusionAttentionPE,
     'adj': AdjacencyAttentionPE,
     'diffusion': DiffusionAttentionPE,
-    'progressive_diffusion': DiffusionAttentionPE,
 }

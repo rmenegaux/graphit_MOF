@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from batchnorm import MaskedBatchNorm1d
+
 import numpy as np
 
 """
@@ -60,16 +62,17 @@ class MultiHeadAttentionLayer(nn.Module):
         K_h = K_h.reshape(n_batch, num_nodes, self.num_heads, self.out_dim)
         V_h = V_h.reshape(n_batch, num_nodes, self.num_heads, self.out_dim).transpose(2, 1) # [n_batch, num_heads, num_nodes, out_dim]
 
-        if self.double_attention:
-            Q_2h = self.Q_2(h) # [n_batch, num_nodes, out_dim * num_heads]
-            K_2h = self.K_2(h)
-
-            Q_2h = Q_2h.reshape(n_batch, num_nodes, self.num_heads, self.out_dim)
-            K_2h = K_2h.reshape(n_batch, num_nodes, self.num_heads, self.out_dim)
-            
         # Normalize by sqrt(head dimension)
         scaling = float(self.out_dim) ** -0.5
         K_h = K_h * scaling
+
+        if self.double_attention:
+            Q_2h = self.Q_2(h) # [n_batch, num_nodes, out_dim * num_heads]
+            K_2h = self.K_2(h)
+            K_2h = K_2h * scaling
+
+            Q_2h = Q_2h.reshape(n_batch, num_nodes, self.num_heads, self.out_dim)
+            K_2h = K_2h.reshape(n_batch, num_nodes, self.num_heads, self.out_dim)
 
         if self.use_edge_features:
 
@@ -100,7 +103,8 @@ class MultiHeadAttentionLayer(nn.Module):
                 scores = torch.einsum('bihk,bjhk->bhij', Q_h, K_h)
 
         # Apply exponential and clamp for numerical stability
-        scores = torch.exp(scores.clamp(-5, 5)) # [n_batch, num_heads, num_nodes, num_nodes]
+        # scores = torch.exp(scores.clamp(-5, 5)) # [n_batch, num_heads, num_nodes, num_nodes]
+        scores = torch.exp(scores - scores.amax(dim=(-2, -1), keepdim=True))
 
         # Make sure attention scores for padding are 0
         if mask is not None:
@@ -108,7 +112,7 @@ class MultiHeadAttentionLayer(nn.Module):
 
         if self.use_attention_pe:
             # Introduce new dimension for the different heads
-            k_RW = k_RW.unsqueeze(1)
+            # k_RW = k_RW.unsqueeze(1)
             scores = scores * k_RW
         
         softmax_denom = scores.sum(-1, keepdim=True).clamp(min=1e-6) # [n_batch, num_heads, num_nodes, 1]
@@ -144,7 +148,7 @@ class GraphiT_GT_Layer(nn.Module):
         self.update_edge_features = layer_params['update_edge_features']
         self.use_node_pe = layer_params['use_node_pe']
         self.use_attention_pe = layer_params['use_attention_pe']
-        self.learnable_attention_pe = layer_params['learnable_attention_pe']
+        self.multi_attention_pe = layer_params['multi_attention_pe']
         self.normalize_degree = layer_params['normalize_degree']
         self.update_pos_enc = layer_params['update_pos_enc']
 
@@ -160,8 +164,9 @@ class GraphiT_GT_Layer(nn.Module):
             self.attention_p = MultiHeadAttentionLayer(in_dim, in_dim, out_dim//num_heads, num_heads, **attention_params)
             self.O_p = nn.Linear(out_dim, out_dim)
         
-        self.learnable_attention_pe = layer_params['learnable_attention_pe']
-        if self.use_attention_pe and self.learnable_attention_pe:
+        self.multi_attention_pe = layer_params['multi_attention_pe']
+        self.learnable_attention_pe = (self.use_attention_pe and self.multi_attention_pe == 'aggregate')
+        if self.learnable_attention_pe:
             attention_pe_dim = layer_params['attention_pe_dim']
             self.coef = nn.Parameter(torch.ones(attention_pe_dim) / attention_pe_dim)
 
@@ -170,6 +175,7 @@ class GraphiT_GT_Layer(nn.Module):
             
         if self.batch_norm:
             self.batch_norm1_h = nn.BatchNorm1d(out_dim)
+            #self.batch_norm1_h = MaskedBatchNorm1d(out_dim)
 
         if self.instance_norm:
             self.instance_norm1_h = nn.InstanceNorm1d(out_dim)
@@ -184,6 +190,7 @@ class GraphiT_GT_Layer(nn.Module):
             
         if self.batch_norm:
             self.batch_norm2_h = nn.BatchNorm1d(out_dim)
+            # self.batch_norm2_h = MaskedBatchNorm1d(out_dim)
 
         if self.instance_norm:
             self.instance_norm2_h = nn.InstanceNorm1d(out_dim)
@@ -194,7 +201,8 @@ class GraphiT_GT_Layer(nn.Module):
             self.E12 = nn.Linear(out_dim, out_dim)
             if self.layer_norm:
                 self.layer_norm_e = nn.LayerNorm(out_dim)
-            # self.batch_norm_e = nn.BatchNorm1d(out_dim)
+            if self.batch_norm and self.update_edge_features:
+                self.batch_norm_e = nn.BatchNorm1d(out_dim)
 
     def forward_edges(self, h, e):
         '''
@@ -206,6 +214,11 @@ class GraphiT_GT_Layer(nn.Module):
         E12 = self.E12(e)
 
         e = B1_h + B2_h + E12
+        if self.batch_norm:
+            n_batch, n_nodes, _, n_embedding = e.size()
+            e = e.reshape(n_batch, n_nodes * n_nodes, n_embedding).transpose(1,2)
+            e = self.batch_norm_e(e)
+            e = e.transpose(1,2).reshape(n_batch, n_nodes, n_nodes, n_embedding)
         # e = self.batch_norm_e(e)
         e = e_in + F.relu(e)
         # e = e_in + torch.tanh(e)
@@ -229,7 +242,7 @@ class GraphiT_GT_Layer(nn.Module):
 
         return p
 
-    def feed_forward_block(self, h):
+    def feed_forward_block(self, h, mask=None):
         '''
         Add dense layers to the self-attention
         '''
@@ -250,6 +263,7 @@ class GraphiT_GT_Layer(nn.Module):
 
         if self.batch_norm:
             h = self.batch_norm2_h(h.transpose(1,2)).transpose(1,2)
+            # h = self.batch_norm2_h(h.transpose(1,2), input_mask=mask.unsqueeze(1)).transpose(1,2)
 
         if self.instance_norm:
             # h = self.instance_norm2_h(h.transpose(1,2)).transpose(1,2)
@@ -266,13 +280,19 @@ class GraphiT_GT_Layer(nn.Module):
         if self.layer_norm:
             h = self.layer_norm1_h(h)
 
-        # Compute the weighted average of the relative positional encoding
-        if self.use_attention_pe and self.learnable_attention_pe:
+        if self.learnable_attention_pe:
+            # Compute the weighted average of the relative positional encoding
             with torch.no_grad():
                 coef = self.coef.data.clamp(min=0)
                 coef /= coef.sum(dim=0, keepdim=True)
                 self.coef.data.copy_(coef)
             k_RW = torch.tensordot(self.coef, k_RW, dims=[[0], [-1]])
+        if self.use_attention_pe and self.multi_attention_pe != 'per_head':
+            # Add dimension for the attention heads
+            k_RW = k_RW.unsqueeze(1)
+        elif self.use_attention_pe and self.multi_attention_pe == 'per_head':
+            # One relative attention matrix per attention head
+            k_RW = k_RW.transpose(1, -1)
 
         # multi-head attention out
         h = self.attention_h(h, e, k_RW=k_RW, mask=mask, adj=adj)
@@ -298,15 +318,16 @@ class GraphiT_GT_Layer(nn.Module):
         #     h = self.layer_norm1_h(h)
 
         if self.batch_norm:
-            # Apparently have to do this double transpose for 3D input 
+            # Apparently have to do this double transpose for 3D input
             h = self.batch_norm1_h(h.transpose(1,2)).transpose(1,2)
+            #h = self.batch_norm1_h(h.transpose(1,2), input_mask=mask.unsqueeze(1)).transpose(1,2)
 
         if self.instance_norm:
             # h = self.instance_norm1_h(h.transpose(1,2)).transpose(1,2)
             h = self.instance_norm1_h(h)
 
         if self.feedforward:
-            h = self.feed_forward_block(h)         
+            h = self.feed_forward_block(h, mask=mask)
                 
         if self.use_node_pe and self.update_pos_enc:
             p = self.forward_p(p, e, k_RW=k_RW, mask=mask, adj=adj)

@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
+import torch.profiler as profiler
 
 
 def MAE(scores, targets):
@@ -13,13 +14,19 @@ def MAE(scores, targets):
     MAE = MAE.detach().item()
     return MAE
 
-def train_epoch_sparse(model, optimizer, device, data_loader, epoch):
+def train_epoch_sparse(model, optimizer, device, data_loader, epoch, lr_scheduler, warmup=0):
     model.train()
     epoch_loss = 0
     epoch_train_mae = 0
     nb_data = 0
     gpu_mem = 0
     for iter, (padded_x, padded_adj, padded_p, batch_mask, attention_pe, batch_targets) in enumerate(data_loader):
+        iteration = epoch * len(data_loader) + iter
+        if iteration < warmup:
+            for param_group in optimizer.param_groups:
+                param_group["lr"] = lr_scheduler(iteration)
+
+        # with profiler.record_function("TRANSFER TO GPU"):
         padded_x = padded_x.to(device)
         padded_adj = padded_adj.to(device)
         batch_mask = batch_mask.to(device)
@@ -31,6 +38,7 @@ def train_epoch_sparse(model, optimizer, device, data_loader, epoch):
 
         optimizer.zero_grad()
 
+        # with profiler.record_function("FORWARD PASS"):
         batch_scores = model.forward(padded_x, padded_p, padded_adj, k_RW=attention_pe, mask=batch_mask).flatten()
 
         loss = model.loss(batch_scores, batch_targets)

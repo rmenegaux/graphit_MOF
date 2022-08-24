@@ -6,6 +6,7 @@ GPUID=0
 
 #source /home/rmenegau/.bashrc
 export PATH="/scratch/curan/rmenegau/miniconda3/bin:$PATH"
-source activate cwn_tensorboard
+# source activate cwn_tensorboard
+source activate pyg_39
 cd /home/rmenegau/gcn/transformers
 sh zinc_train.sh

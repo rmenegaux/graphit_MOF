@@ -7,7 +7,7 @@
     "model": "GraphiT",
     "dataset": "ZINC",
     
-    "out_dir": "out/GraphiT_ZINC_gckn_edgeRW/",
+    "out_dir": "/scratch/curan/rmenegau/GraphiT_out/GraphiT_ZINC_yessoftmax/",
     
     "params": {
         "seed": 41,
@@ -19,6 +19,7 @@
         "min_lr": 1e-5,
         "weight_decay": 0,
         "print_epoch_interval": 5,
+        "warmup": 0,
         "max_time": 24
     },
     
@@ -42,20 +43,15 @@
         "use_node_pe": "sum",
         "update_pos_enc": false,
         "node_pe_params": {
-            "node_pe": "gckn",
-            "dim": 64,
-            "path": 8,
-            "sigma": 0.6,
-            "pooling": "sum",
-            "aggregation": true,
-            "normalize": true,
-            "encode_edges": true
+            "node_pe": "rand_walk",
+            "p_steps": 16
         },
 
         "use_attention_pe": true,
         "attention_pe_params": {
-            "attention_pe": "edge_RW",
-            "zero_diag": "true",
+            "attention_pe": "rand_walk",
+            "multi_attention_pe": "per_layer",
+            "zero_diag": "false",
             "p_steps": 16,
             "beta": 0.25
         },

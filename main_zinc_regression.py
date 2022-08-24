@@ -17,6 +17,8 @@ import torch
 
 import torch.optim as optim
 from torch.utils.data import DataLoader
+# import torch.autograd.profiler as profiler
+#from torch.profiler import profile, ProfilerActivity
 
 from tqdm import tqdm
 
@@ -27,7 +29,7 @@ from tqdm import tqdm
 from transformer_net import GraphiTNet
 from data import GraphDataset
 from positional_encoding import NodePositionalEmbeddings, AttentionPositionalEmbeddings
-from compute_gckn_pe import OneHotEdges, GCKNEncoding
+# from compute_gckn_pe import OneHotEdges, GCKNEncoding
 
 
 """
@@ -126,6 +128,7 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
             dset.add_virtual_nodes(x_fill=net_params['num_atom_type'], edge_attr_fill=net_params['num_bond_type'])
 
     # Initialize node positional embeddings
+    print('Initializing node positional embeddings')
     if net_params['use_node_pe'] in ['concat', 'sum', 'product']:
         node_pe_params = net_params['node_pe_params']
         if (node_pe_params['node_pe'] not in NodePositionalEmbeddings.keys()):
@@ -142,6 +145,7 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     else:
         net_params['use_node_pe'] = False
     # Pre-compute attention relative positional embeddings
+    print('Initializing relative positional embeddings')
     if net_params['use_attention_pe']:
         attention_pe_params = net_params['attention_pe_params']
         if (attention_pe_params['attention_pe'] not in AttentionPositionalEmbeddings.keys()):
@@ -151,9 +155,21 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
             AttentionPE = AttentionPositionalEmbeddings[attention_pe_params['attention_pe']](**attention_pe_params)
             for dset in [trainset, valset, testset]:
                 dset.compute_attention_pe(AttentionPE)
-            net_params['learnable_attention_pe'] = (attention_pe_params['attention_pe'] in ['plural_RW', 'edge_RW'])
             net_params['attention_pe_dim'] = AttentionPE.get_dimension()
-            net_params['progressive_attention'] = attention_pe_params['attention_pe'] in ['progressive_RW', 'progressive_diffusion']
+            if net_params['attention_pe_dim'] > 1:
+                net_params['multi_attention_pe'] = attention_pe_params['multi_attention_pe']
+                # Multiple relative attention matrices, one must choose a way to deal with last dimension
+                if net_params['multi_attention_pe'] not in ["per_layer", "per_head", "aggregate"]:
+                    raise ValueError('''Attention PE is multi-dimensional, `multi_attention_pe` must be
+                        one of ["per_layer", "per_head", "aggregate"]''')
+                if net_params['multi_attention_pe'] == "per_layer" and net_params['L'] > net_params['attention_pe_dim']:
+                    raise ValueError('''"multi_attention_pe" == "per_layer", so `attention_pe` last dimension ({})
+                        must be at least equal to the number of layers ({})'''.format(net_params['attention_pe_dim'], net_params['L']))
+                if net_params['multi_attention_pe'] == "per_head" and net_params['n_heads'] != net_params['attention_pe_dim']:
+                    raise ValueError('''"multi_attention_pe" == "per_head", so `attention_pe` last dimension ({})
+                        must match the number of attention heads ({})'''.format(net_params['attention_pe_dim'], net_params['n_heads']))
+            else:
+                net_params['multi_attention_pe'] = None
         
     device = net_params['device']
        
@@ -185,11 +201,32 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     model = model.to(device)
 
     optimizer = optim.Adam(model.parameters(), lr=params['init_lr'], weight_decay=params['weight_decay'])
+    # if params['warmup'] == False:
+    #     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min',
+    #                                                  factor=params['lr_reduce_factor'],
+    #                                                  patience=params['lr_schedule_patience'],
+    #                                                  verbose=True)
+    #     lr_scheduler = None
+    # else:
+    #     lr_steps = (params['init_lr'] - 1e-6) / params['warmup']
+    #     decay_factor = params['init_lr'] * params['warmup'] ** .5
+    #     def lr_scheduler(s):
+    #         if s < params['warmup']:
+    #             lr = 1e-6 + s * lr_steps
+    #         else:
+    #             lr = decay_factor * s ** -.5
+    #         return lr
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min',
                                                      factor=params['lr_reduce_factor'],
                                                      patience=params['lr_schedule_patience'],
                                                      verbose=True)
-    
+    def lr_scheduler(s):
+        if s < params['warmup']:
+            lr = 1e-6 + s * (params['init_lr'] - 1e-6) / params['warmup']
+        else:
+            lr = params['init_lr']
+        return lr
+
     epoch_train_losses, epoch_val_losses = [], []
     epoch_train_MAEs, epoch_val_MAEs = [], [] 
     
@@ -203,13 +240,16 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     # At any point you can hit Ctrl + C to break out of training early.
     try:
         with tqdm(range(params['epochs'])) as t:
+            # with profile(
+            #         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            #         schedule=torch.profiler.schedule(wait=1, warmup=1, active=2)) as prof:
             for epoch in t:
 
                 t.set_description('Epoch %d' % epoch)
 
                 start = time.time()
-
-                epoch_train_loss, epoch_train_mae, optimizer = train_epoch(model, optimizer, device, train_loader, epoch)
+                # with profile(use_cuda=True, with_stack=True, profile_memory=True) as prof:
+                epoch_train_loss, epoch_train_mae, optimizer = train_epoch(model, optimizer, device, train_loader, epoch, lr_scheduler, warmup=params['warmup'])
                 epoch_val_loss, epoch_val_mae, __ = evaluate_network(model, device, val_loader, epoch)
                 epoch_test_loss, epoch_test_mae, __ = evaluate_network(model, device, test_loader, epoch)
                 del __
@@ -249,18 +289,20 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
                     if epoch_nb < epoch-1:
                         os.remove(file)
 
+                # if params['warmup'] == False:
                 scheduler.step(epoch_val_loss)
-
                 if optimizer.param_groups[0]['lr'] < params['min_lr']:
                     print("\n!! LR EQUAL TO MIN LR SET.")
                     break
-                
+
                 # Stop training after params['max_time'] hours
                 if time.time()-t0 > params['max_time']*3600:
                     print('-' * 89)
                     print("Max_time for training elapsed {:.2f} hours, so stopping".format(params['max_time']))
                     break
-                
+
+                    # prof.step()
+
     except KeyboardInterrupt:
         print('-' * 89)
         print('Exiting from training early because of KeyboardInterrupt')
@@ -268,11 +310,16 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     test_loss_lapeig, test_mae, g_outs_test = evaluate_network(model, device, test_loader, epoch)
     train_loss_lapeig, train_mae, g_outs_train = evaluate_network(model, device, train_loader, epoch)
     
+    #.key_averages(group_by_stack_n=5).table(sort_by='self_cpu_time_total', row_limit=10))
+    #.key_averages(group_by_input_shape=True).table(sort_by="cpu_time_total", row_limit=10))
     print("Test MAE: {:.4f}".format(test_mae))
     print("Train MAE: {:.4f}".format(train_mae))
     print("Convergence Time (Epochs): {:.4f}".format(epoch))
     print("TOTAL TIME TAKEN: {:.4f}s".format(time.time()-t0))
     print("AVG TIME PER EPOCH: {:.4f}s".format(np.mean(per_epoch_time)))
+    # print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=20))
+    #.key_averages(group_by_stack_n=5).table(sort_by='self_cpu_time_total', row_limit=10))
+    #.key_averages(group_by_input_shape=True).table(sort_by="cpu_time_total", row_limit=10))
     
     if save_run_tensorboard:
         writer.close()
