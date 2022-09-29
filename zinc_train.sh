@@ -16,9 +16,9 @@ seed0=41
 seed1=95
 seed2=12
 seed3=35
-code=main_zinc_regression.py 
+code=main_mof_regression.py 
 dataset=ZINC
-config='GraphiT_ZINC_NoPE.json'
+config='GraphiT_QMOF.json'
 #config='GraphiT_ZINC_gckn_marg.json'
 # tmux new -s gnn_lspe_ZINC -d
 # tmux send-keys "source ~/.bashrc" C-m

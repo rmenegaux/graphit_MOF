@@ -26,6 +26,8 @@ def train_epoch_sparse(model, optimizer, device, data_loader, epoch, lr_schedule
             for param_group in optimizer.param_groups:
                 param_group["lr"] = lr_scheduler(iteration)
 
+        # import ipdb; ipdb.set_trace()
+
         # with profiler.record_function("TRANSFER TO GPU"):
         padded_x = padded_x.to(device)
         padded_adj = padded_adj.to(device)

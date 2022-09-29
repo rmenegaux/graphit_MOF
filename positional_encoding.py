@@ -21,6 +21,13 @@ def get_laplacian_from_adjacency(A):
 def RW_kernel_from_adjacency(A, beta=0.25, p_steps=1):
     '''
     Returns the random walk kernel matrix for an adjacency matrix A
+    More precisely, returns the matrix `(I - beta*L)^p_steps`, where L is the Laplacian matrix of A
+    or equivalently, `((1-beta)*I + beta*RW)^p_steps`
+
+    Parameters
+    -----------
+    p_steps: number of steps of the random walk
+    beta: probability of taking a step
     '''
     L = get_laplacian_from_adjacency(A)
     I = torch.eye(*L.size(), out=torch.empty_like(L))
@@ -54,9 +61,14 @@ class RandomWalkNodePE(object):
             node_pe[:, power + 1] = RW_power.diagonal()
         return node_pe
 
+    def __str__(self):
+        '''Short class name'''
+        return 'RW{}'.format(self.p_steps)
+
 class IterableNodePE(object):
     '''
-    A disguised list, containing precomputed positional encodings. Careful indexing is required
+    A disguised list, containing precomputed positional encodings. 
+    One tensor per item in the dataset, careful indexing is required
     '''
     def __init__(self, pe_list, **parameters):
         self.current_index = 0
@@ -71,8 +83,16 @@ class IterableNodePE(object):
         self.current_index += 1
         return node_pe
 
+    def __str__(self):
+        '''Short class name'''
+        return 'ListPE'
+
 
 class BaseAttentionPE(object):
+    '''
+    Callable methods that take torch geometric graphs as input,
+    and return a (or several) kernel matrix for that graph
+    '''
 
     def __init__(self, **parameters):
         '''
@@ -100,6 +120,9 @@ class BaseAttentionPE(object):
 
 
 class RandomWalkAttentionPE(BaseAttentionPE):
+    '''
+    Returns the `p_steps` random walk matrix
+    '''
 
     def __init__(self, **parameters):
         self.p_steps = parameters.get('p_steps', 16)
@@ -115,8 +138,15 @@ class RandomWalkAttentionPE(BaseAttentionPE):
     def get_dimension(self):
         return 1
 
+    def __str__(self):
+        '''Short class name'''
+        return 'RW{},{:.2f}'.format(self.p_steps, self.beta)
+
 
 class DiffusionAttentionPE(BaseAttentionPE):
+    '''
+    Returns the heat diffusion matrix
+    '''
     def __init__(self, **parameters):
         self.beta = parameters.get('beta', 0.5)
         super().__init__(**parameters)
@@ -130,10 +160,20 @@ class DiffusionAttentionPE(BaseAttentionPE):
     def get_dimension(self):
         return 1
 
+    def __str__(self):
+        '''Short class name'''
+        return 'Diff{:.2f}'.format(self.beta)
+
 
 class EdgeRWAttentionPE(BaseAttentionPE):
     '''
-    Computes a separate random walk kernel for each edge type
+    Computes a separate random walk kernel for the subgraphs corresponding to each edge type.
+    
+    (Right now only works with edge_attr = 1,2,3 ...)
+
+    Output
+    ------
+    Tensor of size (n_nodes, n_nodes, num_edge_type)
     '''
     def __init__(self, **parameters):
         self.p_steps = parameters.get('p_steps', 16)
@@ -153,10 +193,18 @@ class EdgeRWAttentionPE(BaseAttentionPE):
     def get_dimension(self):
         return self.num_edge_type
 
+    def __str__(self):
+        '''Short class name'''
+        return 'EdgeRW{},{:.2f}'.format(self.p_steps, self.beta)
+
 
 class MultiRWAttentionPE(BaseAttentionPE):
     '''
-    Computes the random walk kernel for all number of steps from 1 to self.p_steps
+    Computes the random walk kernel for every `stride` number of steps from 1 to `p_steps`
+
+    Output
+    ------
+    Tensor of size (n_nodes, n_nodes, p_steps//stride)
     '''
     def __init__(self, **parameters):
         self.p_steps = parameters.get('p_steps', 16)
@@ -178,9 +226,17 @@ class MultiRWAttentionPE(BaseAttentionPE):
     def get_dimension(self):
         return self.p_steps
 
+    def __str__(self):
+        '''Short class name'''
+        return 'MultiRW{},{:.2f}'.format(self.p_steps, self.beta)
+
 class MultiDiffusionAttentionPE(BaseAttentionPE):
     '''
-    Computes the diffusion kernel for all number of steps from 1 to self.p_steps
+    Computes the diffusion kernel for all number of steps from 1 to `p_steps`
+
+    Output
+    ------
+    Tensor of size (n_nodes, n_nodes, p_steps)
     '''
     def __init__(self, **parameters):
         self.p_steps = parameters.get('p_steps', 16)
@@ -201,8 +257,15 @@ class MultiDiffusionAttentionPE(BaseAttentionPE):
     def get_dimension(self):
         return self.p_steps
 
+    def __str__(self):
+        '''Short class name'''
+        return 'MultiDiff{},{:.2f}'.format(self.p_steps, self.beta)
+
 
 class AdjacencyAttentionPE(BaseAttentionPE):
+    '''
+    Returns the normalized adjacency matrix (all rows sum to one)
+    '''
 
     def __init__(self, **parameters):
         super().__init__(**parameters)
@@ -213,6 +276,10 @@ class AdjacencyAttentionPE(BaseAttentionPE):
 
     def get_dimension(self):
         return 1
+
+    def __str__(self):
+        '''Short class name'''
+        return 'Adj'
 
 
 NodePositionalEmbeddings = {

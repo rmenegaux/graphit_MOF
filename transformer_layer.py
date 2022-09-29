@@ -2,9 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from batchnorm import MaskedBatchNorm1d
-
 import numpy as np
+
+from batchnorm import MaskedBatchNorm1d
 
 """
     GraphiT-GT
@@ -24,13 +24,12 @@ def combine_h_p(h, p, operation='sum'):
 """
 
 class MultiHeadAttentionLayer(nn.Module):
-    def __init__(self, in_dim, in_dim_edges, out_dim, num_heads, double_attention=False,
+    def __init__(self, in_dim, in_dim_edges, out_dim, num_heads,
                  use_bias=False, use_attention_pe=True, use_edge_features=False):
         super().__init__()
         
         self.out_dim = out_dim
         self.num_heads = num_heads
-        self.double_attention = double_attention
         self.use_edge_features = use_edge_features
         self.use_attention_pe = use_attention_pe
         
@@ -39,16 +38,12 @@ class MultiHeadAttentionLayer(nn.Module):
         if self.use_edge_features:
             self.E = nn.Linear(in_dim_edges, out_dim * num_heads, bias=use_bias)
 
-        if self.double_attention:
-            self.Q_2 = nn.Linear(in_dim, out_dim * num_heads, bias=use_bias)
-            self.K_2 = nn.Linear(in_dim, out_dim * num_heads, bias=use_bias)
-            self.E_2 = nn.Linear(in_dim_edges, out_dim * num_heads, bias=use_bias)
-
         self.V = nn.Linear(in_dim, out_dim * num_heads, bias=use_bias)
 
         
     def forward(self, h, e, k_RW=None, mask=None, adj=None):
         
+        # import ipdb; ipdb.set_trace()
         Q_h = self.Q(h) # [n_batch, num_nodes, out_dim * num_heads]
         K_h = self.K(h)
         V_h = self.V(h)
@@ -66,41 +61,15 @@ class MultiHeadAttentionLayer(nn.Module):
         scaling = float(self.out_dim) ** -0.5
         K_h = K_h * scaling
 
-        if self.double_attention:
-            Q_2h = self.Q_2(h) # [n_batch, num_nodes, out_dim * num_heads]
-            K_2h = self.K_2(h)
-            K_2h = K_2h * scaling
-
-            Q_2h = Q_2h.reshape(n_batch, num_nodes, self.num_heads, self.out_dim)
-            K_2h = K_2h.reshape(n_batch, num_nodes, self.num_heads, self.out_dim)
-
         if self.use_edge_features:
 
             E = self.E(e)   # [n_batch, num_nodes * num_nodes, out_dim * num_heads]
             E = E.reshape(n_batch, num_nodes, num_nodes, self.num_heads, self.out_dim)
 
-            if self.double_attention:
-                edge_filter = adj.view(n_batch, num_nodes, num_nodes, 1, 1)
-    
-                E = E * edge_filter
-                scores = torch.einsum('bihk,bjhk,bijhk->bhij', Q_h, K_h, E)
-
-                E_2 = self.E_2(e)
-                E_2 = E_2.reshape(n_batch, num_nodes, num_nodes, self.num_heads, self.out_dim)
-                E_2 = E_2 * (~edge_filter)
-                scores = scores + torch.einsum('bihk,bjhk,bijhk->bhij', Q_2h, K_2h, E_2)
-            else:
-                # attention(i, j) = sum(Q_i * K_j * E_ij)
-                scores = torch.einsum('bihk,bjhk,bijhk->bhij', Q_h, K_h, E)
+            scores = torch.einsum('bihk,bjhk,bijhk->bhij', Q_h, K_h, E)
         else:
-            if self.double_attention:
-                edge_filter = adj.view(n_batch, num_nodes, num_nodes, 1, 1)
-                scores_1 = torch.einsum('bihk,bjhk->bhij', Q_h, K_h)
-                scores_2 = torch.einsum('bihk,bjhk->bhij', Q_2h, K_2h)
-                scores = edge_filter * scores_1 + (~edge_filter) * scores_2
-            else:
-                # attention(i, j) = sum(Q_i * K_j)
-                scores = torch.einsum('bihk,bjhk->bhij', Q_h, K_h)
+            # attention(i, j) = sum(Q_i * K_j)
+            scores = torch.einsum('bihk,bjhk->bhij', Q_h, K_h)
 
         # Apply exponential and clamp for numerical stability
         # scores = torch.exp(scores.clamp(-5, 5)) # [n_batch, num_heads, num_nodes, num_nodes]
@@ -131,9 +100,7 @@ class GraphiT_GT_Layer(nn.Module):
         Param: 
     """
     def __init__(self, in_dim, out_dim, num_heads, **layer_params):
-                #  double_attention=False, dropout=0.0,
-                #  layer_norm=False, batch_norm=True, residual=True, use_attention_pe=False,
-                #  use_edge_features=True, update_edge_features=False, update_pos_enc=False, use_bias=False
+
         super().__init__()
         
         self.in_channels = in_dim
@@ -153,16 +120,16 @@ class GraphiT_GT_Layer(nn.Module):
         self.update_pos_enc = layer_params['update_pos_enc']
 
         attention_params = {
-            param: layer_params[param] for param in ['double_attention', 'use_bias', 'use_attention_pe', 'use_edge_features']
+            param: layer_params[param] for param in ['use_bias', 'use_attention_pe', 'use_edge_features']
         }
         # in_dim*2 if positional embeddings are concatenated rather than summed
         in_dim_h = in_dim*2 if (self.use_node_pe == 'concat') else in_dim
         self.attention_h = MultiHeadAttentionLayer(in_dim_h, in_dim, out_dim//num_heads, num_heads, **attention_params)
-        self.O_h = nn.Linear(out_dim, out_dim)
+        self.O_h = nn.Linear(out_dim, out_dim, bias=False)
         
         if self.update_pos_enc:
             self.attention_p = MultiHeadAttentionLayer(in_dim, in_dim, out_dim//num_heads, num_heads, **attention_params)
-            self.O_p = nn.Linear(out_dim, out_dim)
+            self.O_p = nn.Linear(out_dim, out_dim, bias=False)
         
         self.multi_attention_pe = layer_params['multi_attention_pe']
         self.learnable_attention_pe = (self.use_attention_pe and self.multi_attention_pe == 'aggregate')
@@ -174,31 +141,31 @@ class GraphiT_GT_Layer(nn.Module):
             self.layer_norm1_h = nn.LayerNorm(out_dim)
             
         if self.batch_norm:
-            self.batch_norm1_h = nn.BatchNorm1d(out_dim)
-            #self.batch_norm1_h = MaskedBatchNorm1d(out_dim)
+            # self.batch_norm1_h = nn.BatchNorm1d(out_dim)
+            self.batch_norm1_h = MaskedBatchNorm1d(out_dim)
 
         if self.instance_norm:
             self.instance_norm1_h = nn.InstanceNorm1d(out_dim)
         
         # FFN for h
         if self.feedforward:
-            self.FFN_h_layer1 = nn.Linear(out_dim, out_dim*2)
-            self.FFN_h_layer2 = nn.Linear(out_dim*2, out_dim)
+            self.FFN_h_layer1 = nn.Linear(out_dim, out_dim*2, bias=False)
+            self.FFN_h_layer2 = nn.Linear(out_dim*2, out_dim, bias=False)
 
         if self.layer_norm:
             self.layer_norm2_h = nn.LayerNorm(out_dim)
             
         if self.batch_norm:
-            self.batch_norm2_h = nn.BatchNorm1d(out_dim)
-            # self.batch_norm2_h = MaskedBatchNorm1d(out_dim)
+            # self.batch_norm2_h = nn.BatchNorm1d(out_dim)
+            self.batch_norm2_h = MaskedBatchNorm1d(out_dim)
 
         if self.instance_norm:
             self.instance_norm2_h = nn.InstanceNorm1d(out_dim)
 
         if self.update_edge_features:
-            self.B1 = nn.Linear(out_dim, out_dim)
-            self.B2 = nn.Linear(out_dim, out_dim)
-            self.E12 = nn.Linear(out_dim, out_dim)
+            self.B1 = nn.Linear(out_dim, out_dim, bias=False)
+            self.B2 = nn.Linear(out_dim, out_dim, bias=False)
+            self.E12 = nn.Linear(out_dim, out_dim, bias=False)
             if self.layer_norm:
                 self.layer_norm_e = nn.LayerNorm(out_dim)
             if self.batch_norm and self.update_edge_features:
@@ -262,8 +229,8 @@ class GraphiT_GT_Layer(nn.Module):
         #     h = self.layer_norm2_h(h)
 
         if self.batch_norm:
-            h = self.batch_norm2_h(h.transpose(1,2)).transpose(1,2)
-            # h = self.batch_norm2_h(h.transpose(1,2), input_mask=mask.unsqueeze(1)).transpose(1,2)
+            # h = self.batch_norm2_h(h.transpose(1,2)).transpose(1,2)
+            h = self.batch_norm2_h(h.transpose(1,2), input_mask=mask.unsqueeze(1)).transpose(1,2)
 
         if self.instance_norm:
             # h = self.instance_norm2_h(h.transpose(1,2)).transpose(1,2)
@@ -274,6 +241,7 @@ class GraphiT_GT_Layer(nn.Module):
 
         h_in1 = h # for first residual connection
         
+        # import ipdb; ipdb.set_trace()
         # [START] For calculation of h -----------------------------------------------------------------
         h = combine_h_p(h, p, operation=self.use_node_pe)
 
@@ -317,10 +285,14 @@ class GraphiT_GT_Layer(nn.Module):
         # if self.layer_norm:
         #     h = self.layer_norm1_h(h)
 
+        # import ipdb; ipdb.set_trace()
+
         if self.batch_norm:
             # Apparently have to do this double transpose for 3D input
-            h = self.batch_norm1_h(h.transpose(1,2)).transpose(1,2)
-            #h = self.batch_norm1_h(h.transpose(1,2), input_mask=mask.unsqueeze(1)).transpose(1,2)
+            # h = self.batch_norm1_h(h.transpose(1,2)).transpose(1,2)
+            h = self.batch_norm1_h(h.transpose(1,2), input_mask=mask.unsqueeze(1)).transpose(1,2)
+            if mask is not None:
+                h = mask.unsqueeze(-1) * h
 
         if self.instance_norm:
             # h = self.instance_norm1_h(h.transpose(1,2)).transpose(1,2)
@@ -331,6 +303,10 @@ class GraphiT_GT_Layer(nn.Module):
                 
         if self.use_node_pe and self.update_pos_enc:
             p = self.forward_p(p, e, k_RW=k_RW, mask=mask, adj=adj)
+
+        # Set padding back to zero
+        if mask is not None:
+            h = mask.unsqueeze(-1) * h
 
         return h, p, e
         

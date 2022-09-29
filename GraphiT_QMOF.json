@@ -7,12 +7,12 @@
     "model": "GraphiT",
     "dataset": "ZINC",
     
-    "out_dir": "/scratch/curan/rmenegau/GraphiT_out/GraphiT_ZINC_yessoftmax/",
+    "out_dir": "/scratch/curan/rmenegau/GraphiT_out/GraphiT_MOF_Adj_noEdges_maskBN_RW/",
     
     "params": {
         "seed": 41,
-        "epochs": 1000,
-        "batch_size": 32,
+        "epochs": 200,
+        "batch_size": 8,
         "init_lr": 0.0007,
         "lr_reduce_factor": 0.5,
         "lr_schedule_patience": 25,
@@ -26,9 +26,9 @@
     "net_params": {
         "double_attention": false,
 
-        "L": 10,
-        "hidden_dim": 64,
-        "out_dim": 64,
+        "L": 5,
+        "hidden_dim": 32,
+        "out_dim": 32,
         "n_heads": 8,
 
         "residual": true,
@@ -49,16 +49,16 @@
 
         "use_attention_pe": true,
         "attention_pe_params": {
-            "attention_pe": "rand_walk",
+            "attention_pe": "adj",
             "multi_attention_pe": "per_layer",
             "zero_diag": "false",
             "p_steps": 16,
             "beta": 0.25
         },
-        "last_layer_full_attention": true,
+        "last_layer_full_attention": false,
         "normalize_degree": true,
         
-        "use_edge_features": true,
+        "use_edge_features": false,
         "update_edge_features": false,
 
         "virtual_node": false

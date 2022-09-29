@@ -13,6 +13,17 @@ from scipy import sparse as sp
 from transformer_layer import GraphiT_GT_Layer, MLPReadout, combine_h_p
 
 
+class GaussianSmearing(torch.nn.Module):
+    def __init__(self, start=0., stop=1., resolution=50, width=.2, **kwargs):
+        super().__init__()
+        offset = torch.linspace(start, stop, resolution)
+        self.coeff = -0.5 / ((stop - start) * width) ** 2
+        self.register_buffer("offset", offset)
+
+    def forward(self, dist):
+        dist = dist.unsqueeze(-1) - self.offset.view(1,-1)
+        return torch.exp(self.coeff * torch.pow(dist, 2)).float()
+
 class AtomEncoder(torch.nn.Module):
 
     def __init__(self, emb_dim, full_atom_feature_dims):
@@ -94,7 +105,6 @@ class GraphiTNet(nn.Module):
 
         layer_params = {'use_bias': False}
         for param in [
-            'double_attention',
             'dropout',
             'layer_norm',
             'batch_norm',
@@ -115,25 +125,27 @@ class GraphiTNet(nn.Module):
         if self.use_node_pe:
             self.embedding_p = nn.Linear(self.pos_enc_dim, GT_hidden_dim)
         
-
         if isinstance(num_atom_type, list):
             self.embedding_h = AtomEncoder(GT_hidden_dim, num_atom_type)
         else:
-            self.embedding_h = nn.Embedding(num_atom_type, GT_hidden_dim)
+            # self.embedding_h = nn.Linear(num_atom_type, GT_hidden_dim)
+            self.embedding_h = nn.Embedding(num_atom_type, GT_hidden_dim, padding_idx=0)
         
         if self.use_edge_features:
-            if isinstance(num_bond_type, list):
-                self.embedding_e = BondEncoder(GT_hidden_dim, num_bond_type)
-            else:
-                self.embedding_e = nn.Embedding(num_bond_type + 1, GT_hidden_dim)
-        
+            # if isinstance(num_bond_type, list):
+            #     self.embedding_e = BondEncoder(GT_hidden_dim, num_bond_type)
+            # else:
+            #     self.embedding_e = nn.Embedding(num_bond_type + 1, GT_hidden_dim)
+            resolution = 50
+            self.gaussian_smearing = GaussianSmearing(resolution=resolution)
+            self.embedding_e = nn.Linear(resolution, GT_hidden_dim)
 
         self.layers = nn.ModuleList([
             GraphiT_GT_Layer(GT_hidden_dim, GT_hidden_dim, GT_n_heads, **layer_params) for _ in range(GT_layers-1)
             ])
         if net_params['last_layer_full_attention']:
             # Last layer with full vanilla attention (no kernel)
-            layer_params['use_attention_pe'] = False 
+            layer_params['use_attention_pe'] = False
         layer_params['update_edge_features'] = False
         self.layers.append(
             GraphiT_GT_Layer(GT_hidden_dim, GT_out_dim, GT_n_heads, **layer_params)
@@ -147,13 +159,19 @@ class GraphiTNet(nn.Module):
                 
         
     def forward(self, h, p, e, k_RW=None, mask=None):
-        h = h.squeeze()
+        # import ipdb; ipdb.set_trace()
+        h = h.squeeze(dim=-1)
+
         # Node embedding
         h = self.embedding_h(h)
         # Binary adjacency matrix (used for double attention)
         adj = (e > 0)
         # Edge embedding
         if self.use_edge_features:
+            #('before gaussian: ', e.dtype, e.type())
+            with torch.no_grad():
+                e = self.gaussian_smearing(e)
+            #print('after gaussian: ', e.dtype, e.type())
             e = self.embedding_e(e)
 
         h = self.in_feat_dropout(h)

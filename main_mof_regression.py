@@ -17,8 +17,7 @@ import torch
 
 import torch.optim as optim
 from torch.utils.data import DataLoader
-# import torch.autograd.profiler as profiler
-#from torch.profiler import profile, ProfilerActivity
+import torch_geometric
 
 from tqdm import tqdm
 
@@ -52,11 +51,33 @@ def gpu_setup(use_gpu, gpu_id):
 # coding: utf-8
 
 from torch_geometric.data import Data
-from torch_geometric.datasets import ZINC
 from torch.utils.tensorboard import SummaryWriter
 
 save_run_tensorboard = True
-ZINC_PATH = '/scratch/curan/rmenegau/torch_datasets/ZINC'
+
+
+class TimerError(Exception):
+    """A custom exception used to report errors in use of Timer class"""
+
+class Timer:
+    def __init__(self):
+        self._start_time = None
+
+    def start(self):
+        """Start a new timer"""
+        if self._start_time is not None:
+            raise TimerError(f"Timer is running. Use .stop() to stop it")
+
+        self._start_time = time.perf_counter()
+
+    def stop(self):
+        """Stop the timer, and report the elapsed time"""
+        if self._start_time is None:
+            raise TimerError(f"Timer is not running. Use .start() to start it")
+
+        elapsed_time = time.perf_counter() - self._start_time
+        self._start_time = None
+        print(f"Elapsed time: {elapsed_time:0.4f} seconds")
 
 """
     VIEWING MODEL CONFIG AND PARAMS
@@ -112,11 +133,13 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     t0 = time.time()
     per_epoch_time = []
         
-    DATASET_NAME = 'ZINC'
+    DATASET_NAME = 'QMOF'
 
-    trainset = GraphDataset(dataset['train'])
-    valset = GraphDataset(dataset['val'])
-    testset = GraphDataset(dataset['test'])
+    timer = Timer()
+    print('Initializing {} dataset'.format(DATASET_NAME))
+    timer.start()
+    trainset, valset, testset = dataset['train'], dataset['val'], dataset['test']
+    timer.stop()
 
     root_log_dir, root_ckpt_dir, write_file_name, write_config_file, cache_dir = dirs
 
@@ -127,50 +150,6 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
         for dset in [trainset, valset, testset]:
             dset.add_virtual_nodes(x_fill=net_params['num_atom_type'], edge_attr_fill=net_params['num_bond_type'])
 
-    # Initialize node positional embeddings
-    print('Initializing node positional embeddings')
-    if net_params['use_node_pe'] in ['concat', 'sum', 'product']:
-        node_pe_params = net_params['node_pe_params']
-        if (node_pe_params['node_pe'] not in NodePositionalEmbeddings.keys()):
-            print('{} is not a recognized node positional embedding, defaulting to none')
-            net_params['use_node_pe'] = False
-        else:
-            if node_pe_params['node_pe'] == 'gckn':
-                NodePE = precompute_gckn_embeddings_ZINC(node_pe_params, cache_dir)
-            else:
-                NodePE = NodePositionalEmbeddings[node_pe_params['node_pe']](**node_pe_params)
-            net_params['pos_enc_dim'] = NodePE.get_embedding_dimension()
-            for dset in [trainset, valset, testset]:
-                dset.compute_node_pe(NodePE)
-    else:
-        net_params['use_node_pe'] = False
-    # Pre-compute attention relative positional embeddings
-    print('Initializing relative positional embeddings')
-    if net_params['use_attention_pe']:
-        attention_pe_params = net_params['attention_pe_params']
-        if (attention_pe_params['attention_pe'] not in AttentionPositionalEmbeddings.keys()):
-            print('{} is not a recognized attention positional embedding, defaulting to none')
-            net_params['use_attention_pe'] = False
-        else:
-            AttentionPE = AttentionPositionalEmbeddings[attention_pe_params['attention_pe']](**attention_pe_params)
-            for dset in [trainset, valset, testset]:
-                dset.compute_attention_pe(AttentionPE)
-            net_params['attention_pe_dim'] = AttentionPE.get_dimension()
-            if net_params['attention_pe_dim'] > 1:
-                net_params['multi_attention_pe'] = attention_pe_params['multi_attention_pe']
-                # Multiple relative attention matrices, one must choose a way to deal with last dimension
-                if net_params['multi_attention_pe'] not in ["per_layer", "per_head", "aggregate"]:
-                    raise ValueError('''Attention PE is multi-dimensional, `multi_attention_pe` must be
-                        one of ["per_layer", "per_head", "aggregate"]''')
-                if net_params['multi_attention_pe'] == "per_layer" and net_params['L'] > net_params['attention_pe_dim']:
-                    raise ValueError('''"multi_attention_pe" == "per_layer", so `attention_pe` last dimension ({})
-                        must be at least equal to the number of layers ({})'''.format(net_params['attention_pe_dim'], net_params['L']))
-                if net_params['multi_attention_pe'] == "per_head" and net_params['n_heads'] != net_params['attention_pe_dim']:
-                    raise ValueError('''"multi_attention_pe" == "per_head", so `attention_pe` last dimension ({})
-                        must match the number of attention heads ({})'''.format(net_params['attention_pe_dim'], net_params['n_heads']))
-            else:
-                net_params['multi_attention_pe'] = None
-        
     device = net_params['device']
        
     log_dir = os.path.join(root_log_dir, "RUN_" + str(0))
@@ -196,26 +175,12 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     net_params['total_param'] = view_model_param(model, MODEL_NAME)
     # Write the network and optimization hyper-parameters in folder config/
     with open(write_config_file + '.txt', 'w') as f:
-        f.write("""Dataset: {},\nModel: {}\n\nparams={}\n\nnet_params={}\n\n\nTotal Parameters: {}\n\n"""                .format(DATASET_NAME, MODEL_NAME, params, net_params, net_params['total_param']))
+        f.write("""Dataset: {},\nModel: {}\n\nparams={}\n\nnet_params={}\n\n\nTotal Parameters: {}\n\n""".format(DATASET_NAME, MODEL_NAME, params, net_params, net_params['total_param']))
 
     model = model.to(device)
 
     optimizer = optim.Adam(model.parameters(), lr=params['init_lr'], weight_decay=params['weight_decay'])
-    # if params['warmup'] == False:
-    #     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min',
-    #                                                  factor=params['lr_reduce_factor'],
-    #                                                  patience=params['lr_schedule_patience'],
-    #                                                  verbose=True)
-    #     lr_scheduler = None
-    # else:
-    #     lr_steps = (params['init_lr'] - 1e-6) / params['warmup']
-    #     decay_factor = params['init_lr'] * params['warmup'] ** .5
-    #     def lr_scheduler(s):
-    #         if s < params['warmup']:
-    #             lr = 1e-6 + s * lr_steps
-    #         else:
-    #             lr = decay_factor * s ** -.5
-    #         return lr
+
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min',
                                                      factor=params['lr_reduce_factor'],
                                                      patience=params['lr_schedule_patience'],
@@ -231,7 +196,7 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     epoch_train_MAEs, epoch_val_MAEs = [], [] 
     
     # import train functions for all GNNs
-    from train_epoch_zinc import train_epoch_sparse as train_epoch, evaluate_network_sparse as evaluate_network
+    from train_epoch import train_epoch_sparse as train_epoch, evaluate_network_sparse as evaluate_network
     
     train_loader = DataLoader(trainset, num_workers=4, batch_size=params['batch_size'], shuffle=True, collate_fn=trainset.collate_fn())
     val_loader = DataLoader(valset, num_workers=4, batch_size=params['batch_size'], shuffle=False, collate_fn=valset.collate_fn())
@@ -240,15 +205,11 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     # At any point you can hit Ctrl + C to break out of training early.
     try:
         with tqdm(range(params['epochs'])) as t:
-            # with profile(
-            #         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-            #         schedule=torch.profiler.schedule(wait=1, warmup=1, active=2)) as prof:
             for epoch in t:
 
                 t.set_description('Epoch %d' % epoch)
 
                 start = time.time()
-                # with profile(use_cuda=True, with_stack=True, profile_memory=True) as prof:
                 epoch_train_loss, epoch_train_mae, optimizer = train_epoch(model, optimizer, device, train_loader, epoch, lr_scheduler, warmup=params['warmup'])
                 epoch_val_loss, epoch_val_mae, __ = evaluate_network(model, device, val_loader, epoch)
                 epoch_test_loss, epoch_test_mae, __ = evaluate_network(model, device, test_loader, epoch)
@@ -272,7 +233,6 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
                               train_loss=epoch_train_loss, val_loss=epoch_val_loss,
                               train_MAE=epoch_train_mae, val_MAE=epoch_val_mae,
                               test_MAE=epoch_test_mae)
-
 
                 per_epoch_time.append(time.time()-start)
 
@@ -310,16 +270,11 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     test_loss_lapeig, test_mae, g_outs_test = evaluate_network(model, device, test_loader, epoch)
     train_loss_lapeig, train_mae, g_outs_train = evaluate_network(model, device, train_loader, epoch)
     
-    #.key_averages(group_by_stack_n=5).table(sort_by='self_cpu_time_total', row_limit=10))
-    #.key_averages(group_by_input_shape=True).table(sort_by="cpu_time_total", row_limit=10))
     print("Test MAE: {:.4f}".format(test_mae))
     print("Train MAE: {:.4f}".format(train_mae))
     print("Convergence Time (Epochs): {:.4f}".format(epoch))
     print("TOTAL TIME TAKEN: {:.4f}s".format(time.time()-t0))
     print("AVG TIME PER EPOCH: {:.4f}s".format(np.mean(per_epoch_time)))
-    # print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=20))
-    #.key_averages(group_by_stack_n=5).table(sort_by='self_cpu_time_total', row_limit=10))
-    #.key_averages(group_by_input_shape=True).table(sort_by="cpu_time_total", row_limit=10))
     
     if save_run_tensorboard:
         writer.close()
@@ -340,7 +295,6 @@ def main():
     """
         USER CONTROLS
     """
-    
     
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', help="Please give a config.json file with training/model/data/param details")
@@ -377,7 +331,6 @@ def main():
     args = parser.parse_args()
     with open(args.config) as f:
         config = json.load(f)
-        
     # device
     if args.gpu_id is not None:
         config['gpu']['id'] = int(args.gpu_id)
@@ -392,10 +345,7 @@ def main():
         DATASET_NAME = args.dataset
     else:
         DATASET_NAME = config['dataset']
-    # dataset = LoadData(DATASET_NAME)
-    dataset = {
-        split: ZINC(root=ZINC_PATH, subset=True, split=split) for split in ['train', 'val', 'test']
-    }
+
     if args.out_dir is not None:
         out_dir = args.out_dir
     else:
@@ -462,12 +412,73 @@ def main():
     if args.attention_pe is not None:
         net_params['attention_pe'] = args.attention_pe
 
+        # ---- Loading Data ----
+    # dataset = LoadData(DATASET_NAME)
+    # Initialize node positional embeddings
+    NodePE = None
+    if net_params['use_node_pe'] in ['concat', 'sum', 'product']:
+        node_pe_params = net_params['node_pe_params']
+        if (node_pe_params['node_pe'] not in NodePositionalEmbeddings.keys()):
+            print('{} is not a recognized node positional embedding, defaulting to none')
+            net_params['use_node_pe'] = False
+        else:
+            if node_pe_params['node_pe'] == 'gckn':
+                NodePE = precompute_gckn_embeddings_ZINC(node_pe_params, cache_dir)
+            else:
+                NodePE = NodePositionalEmbeddings[node_pe_params['node_pe']](**node_pe_params)
+            net_params['pos_enc_dim'] = NodePE.get_embedding_dimension()
+    else:
+        net_params['use_node_pe'] = False
+    # Pre-compute attention relative positional embeddings
+    AttentionPE = None
+    if net_params['use_attention_pe']:
+        attention_pe_params = net_params['attention_pe_params']
+        if (attention_pe_params['attention_pe'] not in AttentionPositionalEmbeddings.keys()):
+            print('{} is not a recognized attention positional embedding, defaulting to none')
+            net_params['use_attention_pe'] = False
+            AttentionPE = None
+        else:
+            AttentionPE = AttentionPositionalEmbeddings[attention_pe_params['attention_pe']](**attention_pe_params)
+            #for dset in [trainset, valset, testset]:
+            #    dset.compute_attention_pe(AttentionPE)
+            net_params['attention_pe_dim'] = AttentionPE.get_dimension()
+            if net_params['attention_pe_dim'] > 1:
+                net_params['multi_attention_pe'] = attention_pe_params['multi_attention_pe']
+                # Multiple relative attention matrices, one must choose a way to deal with last dimension
+                if net_params['multi_attention_pe'] not in ["per_layer", "per_head", "aggregate"]:
+                    raise ValueError('''Attention PE is multi-dimensional, `multi_attention_pe` must be
+                        one of ["per_layer", "per_head", "aggregate"]''')
+                if net_params['multi_attention_pe'] == "per_layer" and net_params['L'] > net_params['attention_pe_dim']:
+                    raise ValueError('''"multi_attention_pe" == "per_layer", so `attention_pe` last dimension ({})
+                        must be at least equal to the number of layers ({})'''.format(net_params['attention_pe_dim'], net_params['L']))
+                if net_params['multi_attention_pe'] == "per_head" and net_params['n_heads'] != net_params['attention_pe_dim']:
+                    raise ValueError('''"multi_attention_pe" == "per_head", so `attention_pe` last dimension ({})
+                        must match the number of attention heads ({})'''.format(net_params['attention_pe_dim'], net_params['n_heads']))
+            else:
+                net_params['multi_attention_pe'] = None
+
+    from mof_loader import mof_dataset, get_split_set
+    processed_path='processed_graphit'
+    if NodePE is not None:
+        processed_path += '_{}'.format(str(NodePE))
+    if AttentionPE is not None:
+        processed_path += '_{}'.format(str(AttentionPE))
+    print('Saving graphs in {}'.format(processed_path))
+    dataset = mof_dataset(
+        data_path='/scratch2/clear/ejehanno/datasets/qmof_database', # MOF_data
+        processed_path=processed_path, reprocess=False, node_pe=NodePE, attention_pe=AttentionPE)
+    # net_params['use_node_pe'] = False
+    # NodePE = None
+    dataset = {
+        split: GraphDataset(splitset, node_pe=NodePE, attention_pe=AttentionPE)
+        for split, splitset in zip(['train', 'val', 'test'], get_split_set(dataset, train_size=0.8, val_size=0.05))
+    }
     # ZINC
     # FIXME: move this to data.py
     # net_params['num_atom_type'] = dataset.num_atom_type
     # net_params['num_bond_type'] = dataset.num_bond_type
-    net_params['num_atom_type'] = len(np.unique(dataset['train'].data.x))
-    net_params['num_bond_type'] = len(np.unique(dataset['train'].data.edge_attr))
+    net_params['num_atom_type'] = 100 # len(np.unique(dataset['train'][0].data.x))
+    net_params['num_bond_type'] = 1 # len(np.unique(dataset['train'].data.edge_attr))
     net_params['n_classes'] = 1
 
     experiment_name = MODEL_NAME + "_" + DATASET_NAME + "_GPU" + str(config['gpu']['id']) + "_" + time.strftime('%Hh%Mm%Ss_on_%b_%d_%Y')
