@@ -1,4 +1,5 @@
 # from torch.utils.data import Datasets
+from numpy import double
 import torch
 import torch.nn.functional as F
 from torch.utils.data.dataloader import default_collate
@@ -70,13 +71,22 @@ class GraphDataset(object):
                 padded_p = torch.zeros((len(batch), max_len, self.node_pe_dimension), dtype=float)
             if self.use_attention_pe:
                 attention_pe = torch.zeros((len(batch), max_len, max_len, self.attention_pe_dim)).squeeze(-1)
+            
 
+
+
+            soap_features = torch.zeros((len(batch), max_len, batch[0].extra_features_SOAP.shape[1]), dtype=float)
             for i, g in enumerate(batch):
                 labels.append(g.y.view(-1))
                 num_nodes = len(g.x)
                 # edge_index = utils.add_self_loops(batch[i].edge_index, None, num_nodes =  max_len)[0]
                 g = dense_transform(g)
+                size = [max_len - g.extra_features_SOAP.size(0)] + list(g.extra_features_SOAP.size())[1:]
+                g.extra_features_SOAP = torch.cat([g.extra_features_SOAP, g.extra_features_SOAP.new_zeros(size)], dim=0)
+                
                 padded_x[i] = g.x #.squeeze()
+                soap_features[i] = g.extra_features_SOAP
+                 # g.extra_features_SOAP
 
                 # adj = utils.to_dense_adj(edge_index).squeeze()
                 # print(padded_adj[i].shape, g.adj.shape)
@@ -86,5 +96,5 @@ class GraphDataset(object):
                     padded_p[i, :num_nodes] = g.node_pe
                 if self.use_attention_pe:
                     attention_pe[i, :num_nodes, :num_nodes] = g.attention_pe
-            return padded_x, padded_adj, padded_p, mask, attention_pe, default_collate(labels)
+            return soap_features, padded_x, padded_adj, padded_p, mask, attention_pe, default_collate(labels)
         return collate

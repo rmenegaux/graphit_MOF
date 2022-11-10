@@ -20,18 +20,19 @@ def train_epoch_sparse(model, optimizer, device, data_loader, epoch, lr_schedule
     epoch_train_mae = 0
     nb_data = 0
     gpu_mem = 0
-    for iter, (padded_x, padded_adj, padded_p, batch_mask, attention_pe, batch_targets) in enumerate(data_loader):
+    for iter, (soap_features, padded_x, padded_adj, padded_p, batch_mask, attention_pe, batch_targets) in enumerate(data_loader):
         iteration = epoch * len(data_loader) + iter
         if iteration < warmup:
             for param_group in optimizer.param_groups:
                 param_group["lr"] = lr_scheduler(iteration)
 
         # import ipdb; ipdb.set_trace()
-
         # with profiler.record_function("TRANSFER TO GPU"):
         padded_x = padded_x.to(device)
         padded_adj = padded_adj.to(device)
         batch_mask = batch_mask.to(device)
+        if soap_features is not None:
+            soap_features = soap_features.float().to(device)
         if attention_pe is not None:
             attention_pe = attention_pe.to(device)
         batch_targets = batch_targets.flatten().to(device)
@@ -41,7 +42,7 @@ def train_epoch_sparse(model, optimizer, device, data_loader, epoch, lr_schedule
         optimizer.zero_grad()
 
         # with profiler.record_function("FORWARD PASS"):
-        batch_scores = model.forward(padded_x, padded_p, padded_adj, k_RW=attention_pe, mask=batch_mask).flatten()
+        batch_scores = model.forward(padded_x, padded_p, padded_adj, k_RW=attention_pe, mask=batch_mask, soap=soap_features).flatten()
 
         loss = model.loss(batch_scores, batch_targets)
         loss.backward()
@@ -61,17 +62,19 @@ def evaluate_network_sparse(model, device, data_loader, epoch):
     nb_data = 0
     out_graphs_for_lapeig_viz = []
     with torch.no_grad():
-        for iter, (padded_x, padded_adj, padded_p, batch_mask, attention_pe, batch_targets) in enumerate(data_loader):
+        for iter, (soap_features, padded_x, padded_adj, padded_p, batch_mask, attention_pe, batch_targets) in enumerate(data_loader):
             padded_x = padded_x.to(device)
             padded_adj = padded_adj.to(device)
             batch_mask = batch_mask.to(device)
+            if soap_features is not None:
+                soap_features = soap_features.float().to(device)
             if attention_pe is not None:
                 attention_pe = attention_pe.to(device)
             batch_targets = batch_targets.flatten().to(device)
             if padded_p is not None:
                 padded_p = padded_p.float().to(device)
 
-            batch_scores = model.forward(padded_x, padded_p, padded_adj, k_RW=attention_pe, mask=batch_mask).flatten()
+            batch_scores = model.forward(padded_x, padded_p, padded_adj, k_RW=attention_pe, mask=batch_mask, soap=soap_features).flatten()
 
             loss = model.loss(batch_scores, batch_targets)
             epoch_test_loss += loss.detach().item()

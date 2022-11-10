@@ -1,6 +1,7 @@
 from glob import glob
 import os
 import json
+from matplotlib.pyplot import axis
 
 import numpy as np
 import pandas as pd
@@ -10,8 +11,11 @@ import torch
 import torch.nn.functional as F
 from torch_geometric.data import Dataset, Data
 from torch_geometric.utils import dense_to_sparse, degree, add_self_loops
-from sklearn.preprocessing import LabelBinarizer
+from sklearn.preprocessing import LabelBinarizer, StandardScaler
+from sklearn.decomposition import PCA
 from ase import io
+from dscribe.descriptors import SOAP
+ 
 
 
 def get_split_set(dataset, train_size=0.6, val_size=0.2, cv_fold=None, seed=1234):
@@ -107,7 +111,9 @@ class mof_dataset(Dataset):
     def reprocess_mof(self, targets_path='qmof.csv', max_dist=8, max_neigh=12,
                       label_of_interest='outputs.pbe.bandgap',
                       save_distances=False,
-                      node_pe=None, attention_pe=None):
+                      node_pe=None, attention_pe=None,
+                      soap_args={'rcut': 8.0, 'nmax': 6,
+                      'lmax': 4, 'sigma': 0.3, 'pca': 50}):
         '''
         It takes ~10 min to reprocess the whole dataset.
         
@@ -149,6 +155,7 @@ class mof_dataset(Dataset):
             # Get the crystal through ase
             crystal = io.read(os.path.join(self.raw_dir, f'{qmof_id}.json'))
             elements.append(list(set(crystal.get_chemical_symbols())))
+            data.ase = crystal
 
             # Get the distances
             distance_matrix = crystal.get_all_distances(mic=True)
@@ -192,6 +199,7 @@ class mof_dataset(Dataset):
 
             # TODO: use SOAP | use SM ?
 
+
             # TODO: edge features
             if len(edge_weight) > 0:
                 edge_mean += edge_weight.mean()
@@ -206,14 +214,52 @@ class mof_dataset(Dataset):
             # And finally
             data_list.append(data)
 
+        species = list(set(sum(elements, []))) # all atoms
+        species.sort()
+
+        # adding SOAP features
+        make_feature_SOAP = SOAP(
+            species=species,
+            periodic=True,
+            sparse=False,
+            average='off',
+            rbf="gto",
+            crossover=False,
+            **soap_args
+        )
+
+
         # Normalize distances between 0 and 1
         edge_mean /= len(targets)
         edge_std /= len(targets)
 
-        for data in data_list:
+
+        features_for_PCA = []
+        for i, data in tqdm.tqdm(enumerate(data_list), desc='Getting SOAP features'):
             data.edge_weight = (data.edge_weight - feat_min) / (feat_max - feat_min)
             # Save the Gaussian smearing for the network, to save space
             data.edge_attr = data.edge_weight.reshape(-1, 1)
+
+            features_SOAP = make_feature_SOAP.create(data.ase)
+            data.extra_features_SOAP = np.array(features_SOAP)
+            delattr(data, 'ase')
+
+            # adding SOAP features
+            if i<1000:   
+                features_for_PCA.append(data.extra_features_SOAP)
+                
+        
+        pca = PCA(n_components=soap_args['pca'])
+        sc = StandardScaler()
+        standards = sc.fit_transform(np.concatenate(features_for_PCA, axis=0))
+        components = pca.fit_transform(standards)
+        
+        for data in tqdm.tqdm(data_list, desc='Standardization and PCA of SOAP features'):
+            features_SOAP = sc.transform(data.extra_features_SOAP)
+            features_SOAP = pca.transform(features_SOAP)
+            #TODO : change to double?
+            data.extra_features_SOAP = torch.Tensor(features_SOAP)
+            
 
         # Compute positional encodings per node
         if node_pe is not None:

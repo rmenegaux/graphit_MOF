@@ -133,7 +133,7 @@ def precompute_gckn_embeddings_ZINC(node_pe_params, cache_dir):
     TRAINING CODE
 """
 
-def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
+def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs, checkpoint_file):
     t0 = time.time()
     per_epoch_time = []
         
@@ -185,6 +185,7 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     with open(write_config_file + '.txt', 'w') as f:
         f.write("""Dataset: {},\nModel: {}\n\nparams={}\n\nnet_params={}\n\n\nTotal Parameters: {}\n\n""".format(DATASET_NAME, MODEL_NAME, params, net_params, net_params['total_param']))
 
+    model.load_state_dict(torch.load(checkpoint_file))
     model = model.to(device)
 
     optimizer = optim.Adam(model.parameters(), lr=params['init_lr'], weight_decay=params['weight_decay'])
@@ -193,7 +194,7 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     #                                                  factor=params['lr_reduce_factor'],
     #                                                  patience=params['lr_schedule_patience'],
     #                                                  verbose=True)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=params['T_max'], eta_min=params['min_lr'],
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=50,
                                                      verbose=True)
     def lr_scheduler(s):
         if s < params['warmup']:
@@ -204,9 +205,10 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
 
     epoch_train_losses, epoch_val_losses = [], []
     epoch_train_MAEs, epoch_val_MAEs = [], [] 
+    
     # import train functions for all GNNs
     from train_epoch import train_epoch_sparse as train_epoch, evaluate_network_sparse as evaluate_network
-
+    
     train_loader = DataLoader(trainset, num_workers=4, batch_size=params['batch_size'], shuffle=True, collate_fn=trainset.collate_fn())
     val_loader = DataLoader(valset, num_workers=4, batch_size=params['batch_size'], shuffle=False, collate_fn=valset.collate_fn())
     test_loader = DataLoader(testset, num_workers=4, batch_size=params['batch_size'], shuffle=False, collate_fn=testset.collate_fn())
@@ -238,11 +240,11 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
                 #     writer.add_scalar('test/_mae', epoch_test_mae, epoch)
                 #     writer.add_scalar('learning_rate', optimizer.param_groups[0]['lr'], epoch)
 
-                if params["save_run_tensorboard"]:    
-                    wandb.log({'train/_loss': epoch_train_loss,
-                            'val/_loss': epoch_val_loss,
-                            'test/_mae': epoch_test_mae,
-                            'learning_rate': optimizer.param_groups[0]['lr']})
+                    
+                wandb.log({'train/_loss': epoch_train_loss,
+                          'val/_loss': epoch_val_loss,
+                          'test/_mae': epoch_test_mae,
+                          'learning_rate': optimizer.param_groups[0]['lr']})
 
                         
                 t.set_postfix(time=time.time()-start, lr=optimizer.param_groups[0]['lr'],
@@ -257,7 +259,6 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
                 if not os.path.exists(ckpt_dir):
                     os.makedirs(ckpt_dir)
                 torch.save(model.state_dict(), '{}.pkl'.format(ckpt_dir + "/epoch_" + str(epoch)))
-                torch.save(optimizer.state_dict(), '{}.pkl'.format(ckpt_dir + "/op_epoch_" + str(epoch)))
 
                 files = glob.glob(ckpt_dir + '/*.pkl')
                 for file in files:
@@ -296,8 +297,7 @@ def train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs):
     
     # if params["save_run_tensorboard"]:
     #     writer.close()
-    if params["save_run_tensorboard"]:
-        wandb.finish()
+    wandb.finish()
 
     """
         Write the results in out_dir/results folder
@@ -321,34 +321,11 @@ def main():
     parser.add_argument('--gpu_id', help="Please give a value for gpu id")
     parser.add_argument('--model', help="Please give a value for model name")
     parser.add_argument('--dataset', help="Please give a value for dataset name")
+    parser.add_argument('--checkpoint', help="Please give a value for out_dir")
+    parser.add_argument('--epochs', help="Please give a value for epochs")
+    parser.add_argument('--oarid', default=0, help="Please give a value for oarid")
     parser.add_argument('--out_dir', help="Please give a value for out_dir")
     parser.add_argument('--seed', help="Please give a value for seed")
-    parser.add_argument('--epochs', help="Please give a value for epochs")
-    parser.add_argument('--batch_size', help="Please give a value for batch_size")
-    parser.add_argument('--init_lr', help="Please give a value for init_lr")
-    parser.add_argument('--lr_reduce_factor', help="Please give a value for lr_reduce_factor")
-    parser.add_argument('--lr_schedule_patience', help="Please give a value for lr_schedule_patience")
-    parser.add_argument('--min_lr', help="Please give a value for min_lr")
-    parser.add_argument('--weight_decay', help="Please give a value for weight_decay")
-    parser.add_argument('--print_epoch_interval', help="Please give a value for print_epoch_interval")    
-    parser.add_argument('--L', help="Please give a value for L")
-    parser.add_argument('--hidden_dim', help="Please give a value for hidden_dim")
-    parser.add_argument('--out_dim', help="Please give a value for out_dim")
-    parser.add_argument('--residual', help="Please give a value for residual")
-    parser.add_argument('--use_edge_features', help="Please give a value for use_edge_features")
-    parser.add_argument('--update_edge_features', help="Please give a value for update_edge_features")
-    parser.add_argument('--readout', help="Please give a value for readout")
-    parser.add_argument('--in_feat_dropout', help="Please give a value for in_feat_dropout")
-    parser.add_argument('--dropout', help="Please give a value for dropout")
-    parser.add_argument('--layer_norm', help="Please give a value for layer_norm")
-    parser.add_argument('--feedforward', help="Please give a value for feedforward")
-    parser.add_argument('--batch_norm', help="Please give a value for batch_norm")
-    parser.add_argument('--max_time', help="Please give a value for max_time")
-    parser.add_argument('--pos_enc_dim', help="Please give a value for pos_enc_dim")
-    parser.add_argument('--node_pe', help="Please give a value for node_pe")
-    parser.add_argument('--attention_pe', help="Please give a value for attention_pe")
-    parser.add_argument('--update_pos_enc', help="Please give a value for update_pos_enc")
-    parser.add_argument('--oarid', default=0, help="Please give a value for oarid")
 
     
 
@@ -375,8 +352,11 @@ def main():
     else:
         out_dir = config['out_dir']
 
+    wandb.init(project="graphit-perceiver", entity="mselosse")
 
-    
+    wandb.config = config   
+    if args.oarid != 0:
+        wandb.run.name = args.oarid
     
 
     params = config['params']
@@ -385,60 +365,12 @@ def main():
         params['seed'] = int(args.seed)
     if args.epochs is not None:
         params['epochs'] = int(args.epochs)
-    if args.batch_size is not None:
-        params['batch_size'] = int(args.batch_size)
-    if args.init_lr is not None:
-        params['init_lr'] = float(args.init_lr)
-    if args.lr_reduce_factor is not None:
-        params['lr_reduce_factor'] = float(args.lr_reduce_factor)
-    if args.lr_schedule_patience is not None:
-        params['lr_schedule_patience'] = int(args.lr_schedule_patience)
-    if args.min_lr is not None:
-        params['min_lr'] = float(args.min_lr)
-    if args.weight_decay is not None:
-        params['weight_decay'] = float(args.weight_decay)
-    if args.print_epoch_interval is not None:
-        params['print_epoch_interval'] = int(args.print_epoch_interval)
-    if args.max_time is not None:
-        params['max_time'] = float(args.max_time)
-
+    
     # Network parameters
     net_params = config['net_params']
     net_params['device'] = device
     net_params['gpu_id'] = config['gpu']['id']
-    net_params['batch_size'] = params['batch_size']
-    if args.L is not None:
-        net_params['L'] = int(args.L)
-    if args.hidden_dim is not None:
-        net_params['hidden_dim'] = int(args.hidden_dim)
-    if args.out_dim is not None:
-        net_params['out_dim'] = int(args.out_dim)   
-    if args.residual is not None:
-        net_params['residual'] = True if args.residual=='True' else False
-    if args.use_edge_features is not None:
-        net_params['use_edge_features'] = True if args.use_edge_features=='True' else False
-    if args.update_edge_features is not None:
-        net_params['update_edge_features'] = True if args.update_edge_features=='True' else False
-    if args.update_pos_enc is not None:
-        net_params['update_pos_enc'] = True if args.update_pos_enc=='True' else False
-    if args.readout is not None:
-        net_params['readout'] = args.readout
-    if args.in_feat_dropout is not None:
-        net_params['in_feat_dropout'] = float(args.in_feat_dropout)
-    if args.dropout is not None:
-        net_params['dropout'] = float(args.dropout)
-    if args.feedforward is not None:
-        net_params['feedforward'] = True if args.feedforward=='True' else False
-    if args.layer_norm is not None:
-        net_params['layer_norm'] = True if args.layer_norm=='True' else False
-    if args.batch_norm is not None:
-        net_params['batch_norm'] = True if args.batch_norm=='True' else False
-    if args.pos_enc_dim is not None:
-        net_params['pos_enc_dim'] = int(args.pos_enc_dim)
-    if args.node_pe is not None:
-        net_params['node_pe'] = args.node_pe
-    if args.attention_pe is not None:
-        net_params['attention_pe'] = args.attention_pe
+    checkpoint_file = args.checkpoint
 
         # ---- Loading Data ----
     # dataset = LoadData(DATASET_NAME)
@@ -450,10 +382,7 @@ def main():
             print('{} is not a recognized node positional embedding, defaulting to none')
             net_params['use_node_pe'] = False
         else:
-            if node_pe_params['node_pe'] == 'gckn':
-                NodePE = precompute_gckn_embeddings_ZINC(node_pe_params, cache_dir)
-            else:
-                NodePE = NodePositionalEmbeddings[node_pe_params['node_pe']](**node_pe_params)
+            NodePE = NodePositionalEmbeddings[node_pe_params['node_pe']](**node_pe_params)
             net_params['pos_enc_dim'] = NodePE.get_embedding_dimension()
     else:
         net_params['use_node_pe'] = False
@@ -492,16 +421,11 @@ def main():
     if AttentionPE is not None:
         processed_path += '_{}'.format(str(AttentionPE))
     print('Saving graphs in {}'.format(processed_path))
-    
-    soap_args=None
-    if config['soap_args'] is not None:
-        soap_args=config['soap_args']
     dataset = mof_dataset(
-        data_path=config['data_dir'], # MOF_data
-        # data_path='/gpfsstore/rech/tbr/uho58uo/qmof_database', # MOF_data
+        # data_path='/scratch2/clear/ejehanno/datasets/qmof_database', # MOF_data
+        data_path='/gpfsstore/rech/tbr/uho58uo/qmof_database', # MOF_data
         save_path=None,
-        processed_path=processed_path, reprocess=False, node_pe=NodePE, attention_pe=AttentionPE,
-        soap_args=soap_args)
+        processed_path=processed_path, reprocess=False, node_pe=NodePE, attention_pe=AttentionPE)
     # net_params['use_node_pe'] = False
     # NodePE = None
     dataset = {
@@ -515,9 +439,7 @@ def main():
     net_params['num_atom_type'] = 100 # len(np.unique(dataset['train'][0].data.x))
     net_params['num_bond_type'] = 1 # len(np.unique(dataset['train'].data.edge_attr))
     net_params['n_classes'] = 1
-    if soap_args is not None:
-        net_params['pca'] = soap_args['pca'] 
-    
+
     experiment_name = MODEL_NAME + "_" + DATASET_NAME + "_GPU" + str(config['gpu']['id']) + "_" + \
     time.strftime('%Hh%Mm%Ss_on_%b_%d_%Y') + "_" + str(args.oarid)
     print("Experiments dir : {}".format(experiment_name))
@@ -539,17 +461,7 @@ def main():
     if not os.path.exists(out_dir + 'cache'):
         os.makedirs(out_dir + 'cache')
 
-    log_dir = os.path.join(root_log_dir, "RUN_" + str(0))
-    
-    # wandb.tensorboard.patch(root_logdir=log_dir)
-    if params["save_run_tensorboard"]:
-        wandb.init(project="graphit-perceiver", entity="mselosse")
-
-        wandb.config = config   
-        if args.oarid != 0:
-            wandb.run.name = args.oarid
-
     # net_params['total_param'] = view_model_param(MODEL_NAME, net_params)
-    train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs)
+    train_val_pipeline(MODEL_NAME, dataset, params, net_params, dirs, checkpoint_file)
    
 main()

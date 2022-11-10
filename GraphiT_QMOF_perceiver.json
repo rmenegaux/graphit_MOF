@@ -5,30 +5,43 @@
     },
 
     
-    "model": "GraphiT",
+    "model": "GraphiT_perceiver",
     "dataset": "Mof",
     
-    "out_dir": "/scratch/prospero/mselosse/GraphiT_out/GraphiT_MOF/",
+    "_comment_out_dir": "/scratch/prospero/mselosse/GraphiT_out/GraphiT_perceiver_MOF/",
+    "out_dir": "/gpfsstore/rech/tbr/uho58uo/GraphiT_out/GraphiT_perceiver_MOF/",
+
+    "_comment_data_dir": "/scratch/prospero/mselosse/qmof_database/",
+    "data_dir": "/gpfsstore/rech/tbr/uho58uo/qmof_database/",
     
     "params": {
-        "save_run_tensorboard": false,
-        "seed": 41,
-        "epochs": 200,
+        "save_run_tensorboard": true,
+        "seed": 35,
+        "epochs": 1000,
         "batch_size": 32,
-        "init_lr": 0.0007,
+        "init_lr": 7e-4,
         "lr_reduce_factor": 0.5,
         "lr_schedule_patience": 25,
-        "min_lr": 1e-5,
+        "min_lr": 1e-10,
+        "T_max": 100,
         "weight_decay": 0,
         "print_epoch_interval": 5,
         "warmup": 0,
-        "max_time": 24
+        "max_time": 96
+    },
+
+    "soap_args": {
+        "rcut": 8.0,
+        "nmax": 6,
+        "lmax": 4,
+        "sigma": 0.3,
+        "pca": 50
     },
     
     "net_params": {
         "double_attention": false,
-
-        "L": 5,
+        "L": 2,
+        "L_cross": 3,
         "hidden_dim": 32,
         "out_dim": 32,
         "n_heads": 8,
@@ -36,8 +49,8 @@
         "residual": true,
         "readout": "sum",
         "in_feat_dropout": 0.0,
-        "dropout": 0.0,
-        "feedforward": false,
+        "dropout": 0.5,
+        "feedforward": true,
         "layer_norm": false,
         "batch_norm": true,
         "instance_norm": false,
@@ -65,6 +78,6 @@
 
         "virtual_node": false,
         "cross_dim":16,
-        "num_latents":64
+        "num_latents":32
     }
 }

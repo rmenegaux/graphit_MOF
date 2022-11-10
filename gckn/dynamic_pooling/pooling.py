@@ -111,7 +111,6 @@ def dpooling_torch(input, kernel_size, pooling='sum'):
     all_paths = input.shape[0]
     row = torch.arange(len(kernel_size), device=kernel_size.device).repeat_interleave(kernel_size, dim=0)
     col = torch.arange(all_paths, device=kernel_size.device)
-    #breakpoint()
     indices = torch.stack([row, col], dim=0)
     if pooling == 'sum':
         data = torch.ones(all_paths, device=kernel_size.device)
